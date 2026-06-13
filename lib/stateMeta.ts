@@ -24,16 +24,54 @@ export const STATE_META: Record<DaemonState, StateMeta> = {
 };
 
 /**
- * Which pre-rendered art each state shows. This is the A0 placeholder mapping:
- * a simple <img> swap. A1 replaces the swap with the live WebGL distortion
- * canvas (hue-rotation instead of separate-color art) behind the same Flame API.
+ * The six Ignis expressions. Each lives in its own folder under public/daemon/
+ * as four 2048² transparent layers: full (flat composite), core (stable
+ * body + face), tips (the licking flame that gets distorted), glow (soft aura).
  */
+export type ExpressionKey =
+  | 'idle' | 'listening' | 'thinking' | 'speaking' | 'happy' | 'concerned';
+
+export interface ExpressionAssets {
+  full: string;
+  core: string;
+  tips: string;
+  glow: string;
+}
+
+export function expressionAssets(key: ExpressionKey): ExpressionAssets {
+  const base = `/daemon/${key}`;
+  return {
+    full: `${base}/full.png`,
+    core: `${base}/core.png`,
+    tips: `${base}/tips.png`,
+    glow: `${base}/glow.png`,
+  };
+}
+
+/** Shared helper textures. */
+export const FX = {
+  ember: '/daemon/fx/ember.png',
+  noise: '/daemon/fx/noise.png',
+} as const;
+
+/** Which expression each DaemonState wears. */
+export const STATE_EXPRESSION: Record<DaemonState, ExpressionKey> = {
+  idle: 'idle',
+  listening: 'listening',
+  thinking: 'thinking',
+  delegating: 'thinking',
+  executing: 'thinking',
+  success: 'happy',
+  error: 'concerned',
+};
+
+/** State → flat composite URL (the PNG fallback + the renderer's base texture). */
 export const STATE_IMAGE: Record<DaemonState, string> = {
-  idle: '/daemon/idle.png',
-  listening: '/daemon/listening.png',
-  thinking: '/daemon/thinking.png',
-  delegating: '/daemon/thinking.png',
-  executing: '/daemon/thinking.png',
-  success: '/daemon/happy.png',
-  error: '/daemon/concerned.png',
+  idle: expressionAssets('idle').full,
+  listening: expressionAssets('listening').full,
+  thinking: expressionAssets('thinking').full,
+  delegating: expressionAssets('thinking').full,
+  executing: expressionAssets('thinking').full,
+  success: expressionAssets('happy').full,
+  error: expressionAssets('concerned').full,
 };
