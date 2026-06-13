@@ -27,10 +27,20 @@ const ALL_STATES: DaemonState[] = [
  * Falls back to the static composite PNG if WebGL is unavailable. Add ?debug to
  * the URL for an on-device panel to force states and tune the look live.
  */
-export function Flame({ state }: { state: DaemonState }) {
+export function Flame({
+  state,
+  getAmplitude,
+}: {
+  state: DaemonState;
+  /** Live voice amplitude 0..1 (e.g. useTts.getAmplitude). Drives the flame while speaking. */
+  getAmplitude?: () => number;
+}) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<FlameRenderer | null>(null);
+  // Latest amplitude getter, readable from the rAF loop without re-subscribing it.
+  const ampRef = useRef(getAmplitude);
+  ampRef.current = getAmplitude;
 
   const [fallback, setFallback] = useState(false);
   const [debug, setDebug] = useState(false);
@@ -90,6 +100,7 @@ export function Flame({ state }: { state: DaemonState }) {
     let running = true;
     const loop = (t: number) => {
       if (!running) return;
+      r.setVoice(ampRef.current ? ampRef.current() : 0);
       r.frame(t);
       raf = requestAnimationFrame(loop);
     };

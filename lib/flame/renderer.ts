@@ -25,6 +25,8 @@ export interface FlameRenderer {
   setTargets(t: FlameTargets): void;
   setMotion(full: boolean): void;
   setPointer(x: number, y: number): void;
+  /** Live voice amplitude 0..1; pushed per frame to make the flame pulse as Ignis speaks. */
+  setVoice(level: number): void;
   resize(cssW: number, cssH: number, dpr: number): void;
   frame(nowMs: number): void;
   dispose(): void;
@@ -195,6 +197,8 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
   let pointerY = 0;
   let offX = 0;
   let offY = 0;
+  let voice = 0;       // smoothed voice amplitude actually applied
+  let voiceTarget = 0; // latest amplitude pushed from the TTS analyser
 
   (['glow', 'core', 'tips'] as LayerName[]).forEach((k) => load(curL[k]));
 
@@ -221,6 +225,7 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
 
   function setMotion(full: boolean) { motion = full ? 1 : 0; }
   function setPointer(x: number, y: number) { pointerX = x; pointerY = y; }
+  function setVoice(level: number) { voiceTarget = level < 0 ? 0 : level > 1 ? 1 : level; }
 
   function resize(cssW: number, cssH: number, dpr: number) {
     const w = Math.max(1, Math.round(cssW * dpr));
@@ -247,13 +252,16 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
     cur.color[1] += (tgt.color[1] - cur.color[1]) * k;
     cur.color[2] += (tgt.color[2] - cur.color[2]) * k;
 
+    // Track the voice envelope fast (short attack/decay) so the flame reads as "talking".
+    voice += (voiceTarget - voice) * (1 - Math.exp(-dt / 0.06));
+
     if (crossfading) {
       mix += dt / 0.6;
       if (mix >= 1) { mix = 1; crossfading = false; curL = nextL; }
     }
 
     phase += dt * cur.breathSpeed * Math.PI * 2 * motion;
-    const breath = 1 + Math.sin(phase) * cur.breathAmp;
+    const breath = 1 + Math.sin(phase) * cur.breathAmp + voice * 0.02;
 
     const sway = motion * 0.010;
     const tx = motion * pointerX * 0.020 + Math.sin(now / 1000 * 0.30) * sway;
@@ -269,7 +277,7 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
     gl.uniform1f(U.time, t);
     gl.uniform3fv(U.color, cur.color);
     gl.uniform1f(U.turbulence, cur.turbulence);
-    gl.uniform1f(U.brightness, cur.brightness);
+    gl.uniform1f(U.brightness, cur.brightness * (1 + voice * 0.6));
     gl.uniform1f(U.breath, breath);
     gl.uniform1f(U.motion, motion);
     gl.uniform1f(U.texMix, crossfading ? mix : 0);
@@ -278,11 +286,11 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
       const p = PASSES[i];
       gl.blendFunc(gl.ONE, p.additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
 
-      gl.uniform1f(U.distort, cur.distort * p.distortMul);
+      gl.uniform1f(U.distort, cur.distort * p.distortMul * (1 + voice * 0.7));
       gl.uniform1f(U.tint, p.tint);
       gl.uniform1f(U.whitehot, p.whitehot);
-      gl.uniform1f(U.ember, p.ember ? cur.ember : 0);
-      gl.uniform1f(U.opacity, p.name === 'glow' ? glowOpacity : 1);
+      gl.uniform1f(U.ember, p.ember ? cur.ember + voice * 0.6 : 0);
+      gl.uniform1f(U.opacity, p.name === 'glow' ? Math.min(1, glowOpacity + voice * 0.45) : 1);
       gl.uniform2f(U.offset, offX * p.depth, offY * p.depth);
 
       gl.activeTexture(gl.TEXTURE0);
@@ -305,5 +313,5 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
     gl.deleteProgram(prog);
   }
 
-  return { setTargets, setMotion, setPointer, resize, frame, dispose };
+  return { setTargets, setMotion, setPointer, setVoice, resize, frame, dispose };
 }

@@ -76,7 +76,7 @@ export default function Home() {
 
       {/* upper third — flame, identity, status */}
       <section className="flex flex-1 flex-col items-center justify-center gap-6">
-        <Flame state={flameState} />
+        <Flame state={flameState} getAmplitude={tts.getAmplitude} />
         <div className="flex flex-col items-center gap-3">
           <IdentityBadge />
           <StatusPill state={flameState} label={d.label} />
