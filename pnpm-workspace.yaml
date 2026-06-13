@@ -9,3 +9,8 @@ allowBuilds:
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
+minimumReleaseAgeExclude:
+  - '@dynamic-labs-wallet/core@1.0.38'
+  - '@dynamic-labs-wallet/node-evm@1.0.38'
+  - '@dynamic-labs-wallet/node@1.0.38'
+  - '@dynamic-labs-wallet/primitives@1.0.38'
