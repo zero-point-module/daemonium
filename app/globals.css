@@ -1,26 +1,86 @@
-@import "tailwindcss";
+@import 'tailwindcss';
+
+/* ============================================================
+   Daemonium — global styles (A0 skeleton)
+   Near-black room. Ignis is the only light source. Every glow
+   in the UI is tinted by --state, the live DaemonState color.
+   ============================================================ */
+
+/* Registering --state as a real color lets it interpolate, so the
+   whole room cross-fades smoothly when the flame changes state.
+   Falls back gracefully (var(--state, #ff7a18)) where unsupported. */
+@property --state {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #ff7a18;
+}
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #050505;
+  --fg: #f6ecdd;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  color: var(--fg);
+  background:
+    radial-gradient(90% 55% at 50% 16%, #0c0a07 0%, #050505 68%),
+    var(--bg);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.025);
+  }
+}
+
+@keyframes glow-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.78;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes mic-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--state, #ff7a18) 50%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 16px color-mix(in srgb, var(--state, #ff7a18) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--state, #ff7a18) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

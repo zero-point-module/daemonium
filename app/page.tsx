@@ -1,67 +1,63 @@
-import Image from "next/image";
-import { DynamicWidget } from "@dynamic-labs/sdk-react-core";
+'use client';
+
+import { useEffect, useRef } from 'react';
+import { Flame } from '@/components/Flame';
+import { IdentityBadge } from '@/components/IdentityBadge';
+import { StatusPill } from '@/components/StatusPill';
+import { MicButton } from '@/components/MicButton';
+import { QuickActions } from '@/components/QuickActions';
+import { useDaemon } from '@/lib/useDaemon';
+import { STATE_META } from '@/lib/stateMeta';
 
 export default function Home() {
+  const d = useDaemon();
+  const shellRef = useRef<HTMLDivElement>(null);
+
+  // Publish the live state color to CSS. Every glow reads var(--state); because
+  // --state is a registered @property <color>, the whole room cross-fades.
+  useEffect(() => {
+    shellRef.current?.style.setProperty('--state', STATE_META[d.state].color);
+  }, [d.state]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <DynamicWidget />
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main
+      ref={shellRef}
+      className="relative mx-auto flex h-[100dvh] w-full max-w-md flex-col items-center overflow-hidden px-6 pt-[env(safe-area-inset-top)]"
+      style={{ transition: '--state 600ms ease' }}
+    >
+      {/* ambient room glow the whole UI picks up, tinted by the state color */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-20"
+        style={{
+          background:
+            'radial-gradient(120% 78% at 50% 20%, color-mix(in srgb, var(--state, #ff7a18) 13%, transparent), transparent 60%)',
+        }}
+      />
+
+      {/* upper third — flame, identity, status */}
+      <section className="flex flex-1 flex-col items-center justify-center gap-6">
+        <Flame state={d.state} />
+        <div className="flex flex-col items-center gap-3">
+          <IdentityBadge />
+          <StatusPill state={d.state} label={d.label} />
+        </div>
+      </section>
+
+      {/* what Ignis says — on-screen text (graceful fallback; TTS arrives in A2/A3) */}
+      <div className="flex min-h-[2.75rem] items-center px-2 text-center">
+        {d.caption ? (
+          <p className="text-pretty text-[15px] leading-snug text-white/75">
+            {d.caption}
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        ) : null}
+      </div>
+
+      {/* lower third — mic + quick actions */}
+      <section className="flex flex-col items-center gap-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
+        <MicButton open={d.micOpen} busy={d.busy} onToggle={d.toggleMic} />
+        <QuickActions busy={d.busy} onPick={d.run} />
+      </section>
+    </main>
   );
 }
