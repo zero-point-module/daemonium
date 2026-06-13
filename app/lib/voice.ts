@@ -14,7 +14,7 @@
  */
 export const STT_MODEL = "gpt-4o-mini-transcribe" as const;
 
-/** Response body of POST /api/stt. Mirrors `SttResponse` in the root lib/types.ts seam. */
+/** Response body of POST /api/stt, shared by the route and the mic client. */
 export interface SttResponse {
   text: string;
 }

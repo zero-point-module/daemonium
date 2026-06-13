@@ -9,13 +9,6 @@ import { QuickActions } from '@/components/QuickActions';
 import { ConfirmCard } from '@/components/ConfirmCard';
 import { STATE_META } from '@/lib/stateMeta';
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
-import { authHeaders } from "./lib/daemon-client";
-
-type HandleState =
-  | { status: "checking" }
-  | { status: "needs-handle" }
-  | { status: "ready"; ensName: string }
-  | { status: "error" };
 
 import { useFlameDaemon } from './lib/useFlameDaemon';
 import { useTts } from './lib/useTts';

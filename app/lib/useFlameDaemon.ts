@@ -1,10 +1,10 @@
 'use client';
 
 /**
- * Adapter: presents Luca's live agent hook (`useDaemon`, app/lib/daemon-client)
+ * Adapter: presents the live agent hook (`useDaemon`, app/lib/daemon-client)
  * in the shape the flame UI expects. This is the swap the seam was designed for —
- * the flame components don't change; they just read a live source instead of the
- * scripted mock (lib/useDaemon).
+ * the flame components don't change; they just read a live source instead of a
+ * scripted mock.
  *
  * Derivations follow react-best-practices: caption/busy are computed during render
  * (no effects), and `run` is the underlying hook's already-stable callback. The

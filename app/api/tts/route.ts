@@ -1,7 +1,7 @@
 /**
  * Text-to-speech for Ignis's spoken lines.
  *
- * Takes { text, voice? } (see TtsRequest in lib/types) and streams back audio bytes
+ * Takes { text, voice? } (see TtsRequest in app/lib/types) and streams back audio bytes
  * (audio/mpeg) for the client to play through an AudioContext + AnalyserNode.
  *
  * Why a direct OpenAI call and not the AI Gateway: the Vercel AI Gateway does not
