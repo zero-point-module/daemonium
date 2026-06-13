@@ -6,16 +6,16 @@
  * the flame components don't change; they just read a live source instead of the
  * scripted mock (lib/useDaemon).
  *
- * Derivations follow react-best-practices: caption/busy/state are computed during
- * render (no effects), and the returned callbacks are stable (depend only on the
- * already-stable callbacks from the underlying hook).
+ * Derivations follow react-best-practices: caption/busy are computed during render
+ * (no effects), and `run` is the underlying hook's already-stable callback. The
+ * mic/`listening` overlay is owned by the page (driven by the real `useMic`), not
+ * here — this adapter is purely the agent side.
  */
-import { useCallback, useState } from 'react';
 import { useDaemon } from './daemon-client';
 import type { DaemonState, ProposalCard, ExecuteResponse } from './types';
 
 export interface FlameDaemon {
-  /** Live flame state (with a local `listening` overlay while the mic is open). */
+  /** Live flame state from the agent. */
   state: DaemonState;
   /** Custom status label; null lets StatusPill fall back to STATE_META copy. */
   label: string | null;
@@ -23,12 +23,8 @@ export interface FlameDaemon {
   caption: string | null;
   /** A turn is in flight (chips/mic disabled). */
   busy: boolean;
-  /** Mic visual is open. Real capture + STT arrives in A3; for now it's a hint. */
-  micOpen: boolean;
   /** Send an utterance to the live agent (/api/agent). */
   run: (text: string) => void;
-  /** Toggle the mic visual. */
-  toggleMic: () => void;
   /** Pending action awaiting the human confirm tap, or null. */
   proposal: ProposalCard | null;
   /** Outcome of the last confirmed action, or null. */
@@ -57,7 +53,7 @@ export function useFlameDaemon(): FlameDaemon {
   const {
     messages,
     status,
-    state: agentState,
+    state,
     proposal,
     txResult,
     sendPrompt,
@@ -65,34 +61,15 @@ export function useFlameDaemon(): FlameDaemon {
     dismissProposal,
   } = useDaemon();
 
-  const [micOpen, setMicOpen] = useState(false);
-
   const busy = status === 'submitted' || status === 'streaming';
   const caption = lastSpokenLine(messages);
-
-  // The mic overlay only colours an otherwise-idle flame; once the agent is
-  // working, its real state always wins.
-  const state: DaemonState =
-    micOpen && agentState === 'idle' ? 'listening' : agentState;
-
-  const run = useCallback(
-    (text: string) => {
-      setMicOpen(false);
-      sendPrompt(text);
-    },
-    [sendPrompt],
-  );
-
-  const toggleMic = useCallback(() => setMicOpen((open) => !open), []);
 
   return {
     state,
     label: null,
     caption,
     busy,
-    micOpen,
-    run,
-    toggleMic,
+    run: sendPrompt,
     proposal,
     txResult,
     confirm,

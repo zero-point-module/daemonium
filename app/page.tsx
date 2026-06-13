@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useDynamicContext } from '@dynamic-labs/sdk-react-core';
 import { Flame } from '@/components/Flame';
 import { IdentityBadge } from '@/components/IdentityBadge';
@@ -10,19 +10,51 @@ import { QuickActions } from '@/components/QuickActions';
 import { ConfirmCard } from '@/components/ConfirmCard';
 import { STATE_META } from '@/lib/stateMeta';
 import { useFlameDaemon } from './lib/useFlameDaemon';
+import { useTts } from './lib/useTts';
+import { useMic } from './lib/useMic';
+import { useSpeakOnNewLine } from './lib/useSpeakOnNewLine';
 import { explorerTx } from './lib/chain';
 
 export default function Home() {
   const d = useFlameDaemon();
   const { user, setShowAuthFlow } = useDynamicContext();
+  const tts = useTts();
+  const mic = useMic({ onTranscript: d.run, isSpeaking: tts.isSpeaking });
+
+  // Speak each finished assistant line aloud (once it's final, not the partial stream).
+  useSpeakOnNewLine(d.caption, d.busy, tts.speak);
+
   const shellRef = useRef<HTMLDivElement>(null);
   const signedIn = !!user;
+
+  // The real mic drives the `listening` overlay on an otherwise-idle flame.
+  const flameState =
+    mic.recording && d.state === 'idle' ? 'listening' : d.state;
 
   // Publish the live state color to CSS. Every glow reads var(--state); because
   // --state is a registered @property <color>, the whole room cross-fades.
   useEffect(() => {
-    shellRef.current?.style.setProperty('--state', STATE_META[d.state].color);
-  }, [d.state]);
+    shellRef.current?.style.setProperty('--state', STATE_META[flameState].color);
+  }, [flameState]);
+
+  // Every tap is a chance to arm the iOS AudioContext (must happen in a gesture).
+  const handleMic = useCallback(() => {
+    tts.unlock();
+    mic.toggle();
+  }, [tts.unlock, mic.toggle]);
+
+  const handlePick = useCallback(
+    (text: string) => {
+      tts.unlock();
+      d.run(text);
+    },
+    [tts.unlock, d.run],
+  );
+
+  const handleSummon = useCallback(() => {
+    tts.unlock();
+    setShowAuthFlow(true);
+  }, [tts.unlock, setShowAuthFlow]);
 
   return (
     <main
@@ -42,14 +74,14 @@ export default function Home() {
 
       {/* upper third — flame, identity, status */}
       <section className="flex flex-1 flex-col items-center justify-center gap-6">
-        <Flame state={d.state} />
+        <Flame state={flameState} />
         <div className="flex flex-col items-center gap-3">
           <IdentityBadge />
-          <StatusPill state={d.state} label={d.label} />
+          <StatusPill state={flameState} label={d.label} />
         </div>
       </section>
 
-      {/* middle — the confirm gate, else what Ignis says, plus the last tx result */}
+      {/* middle — the confirm gate, else what Ignis says, plus tx + mic errors */}
       <div className="flex w-full flex-col items-center gap-2 px-2">
         {d.proposal ? (
           <ConfirmCard
@@ -69,17 +101,24 @@ export default function Home() {
         )}
 
         {d.txResult ? <TxLine result={d.txResult} /> : null}
+        {mic.error ? (
+          <span className="text-[12px] text-red-400/80">{mic.error}</span>
+        ) : null}
       </div>
 
       {/* lower third — mic + quick actions once signed in, else the summon gate */}
       <section className="flex flex-col items-center gap-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
         {signedIn ? (
           <>
-            <MicButton open={d.micOpen} busy={d.busy} onToggle={d.toggleMic} />
-            <QuickActions busy={d.busy} onPick={d.run} />
+            <MicButton
+              open={mic.recording}
+              busy={d.busy || mic.transcribing}
+              onToggle={handleMic}
+            />
+            <QuickActions busy={d.busy} onPick={handlePick} />
           </>
         ) : (
-          <SummonGate onSummon={() => setShowAuthFlow(true)} />
+          <SummonGate onSummon={handleSummon} />
         )}
       </section>
     </main>
