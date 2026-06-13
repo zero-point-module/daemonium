@@ -16,6 +16,7 @@ import { USDC } from "./chain";
 import { getWallet } from "./wallet-store";
 import { parentOf } from "./ens";
 import { leftLabel } from "./identity";
+import { MINTER_KEY } from "./minter";
 import { createExecution } from "./executions";
 import { runSubagent } from "./subagent";
 import type { DaemonEvent } from "./types";
@@ -175,7 +176,9 @@ export function buildTools({
               ensLabel: leftLabel(me.ensName),
               parentName: parentOf(me.ensName),
               ownerKey: selfKey,
-              signerKey: selfKey,
+              // The minter (approved once on the parent) mints the root subname — no per-user
+              // owner approval needed. Ignis still ends up OWNING the name.
+              signerKey: MINTER_KEY,
             },
           },
           userId,

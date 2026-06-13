@@ -4,16 +4,11 @@
  * B3/B4 extend the switch with register_subname and spawn_subagent.
  */
 import "server-only";
-import { erc20Abi, isAddress, parseEther, parseUnits, type Address } from "viem";
-import {
-  CHAIN,
-  USDC,
-  USDC_SEND_CAP,
-  agentCardUri,
-  SUBAGENT_GAS_SEED,
-} from "./chain";
+import { erc20Abi, isAddress, parseUnits, type Address } from "viem";
+import { CHAIN, USDC, USDC_SEND_CAP, agentCardUri } from "./chain";
 import { publicClient } from "./evm";
 import { getSigner, createAgentWallet } from "./dynamic-server";
+import { ensureMinter, seedGasIfLow } from "./minter";
 import { registerSubname as ensRegisterSubname, setAgentCardRecord } from "./ens";
 import { registerIdentity } from "./erc8004";
 import { getWallet, updateWallet } from "./wallet-store";
@@ -51,6 +46,9 @@ async function spawnSubagent(
     const parent = await getWallet(parentKey);
     if (!parent?.ensName) return { ok: false, error: `No parent "${parentKey}"` };
 
+    // 0. Make sure the spawning parent has gas (the minter tops it up if low).
+    await seedGasIfLow(parent.address as Address);
+
     // 1. The sub-agent's own wallet — it IS this address (keyed by its nested ENS name).
     const child = await createAgentWallet(childKey, { parentEnsName: parent.ensName });
     const childAddr = child.address as Address;
@@ -68,17 +66,9 @@ async function spawnSubagent(
       signerLabel: parentKey,
     });
 
-    // 4. Best-effort: seed gas from the parent, then the sub-agent claims its own identity.
+    // 4. Best-effort: seed the sub-agent gas (from the minter), then it claims its own identity.
     try {
-      const parentSigner = await getSigner(parentKey);
-      const seedHash = await parentSigner.sendTransaction({
-        to: childAddr,
-        value: parseEther(SUBAGENT_GAS_SEED),
-        account: parentSigner.account!,
-        chain: parentSigner.chain,
-      });
-      await publicClient.waitForTransactionReceipt({ hash: seedHash });
-
+      await seedGasIfLow(childAddr);
       const uri = agentCardUri(childKey);
       const { agentId } = await registerIdentity({ agentURI: uri, signerLabel: childKey });
       await setAgentCardRecord({ name: childKey, uri, signerLabel: childKey });
@@ -107,19 +97,23 @@ async function claimIdentity(
     if (!ownerWallet) return { ok: false, error: `No wallet for "${ownerKey}"` };
     const owner = ownerWallet.address as Address;
 
-    // 1. Mint the (nested) subname, owned by the agent, with the PublicResolver set.
+    // The minter (approved ONCE on the parent) mints the root subname — no per-user approval.
+    await ensureMinter();
+
+    // 1. Mint the subname, owned by the user's Ignis, signed by the minter.
     const { hash } = await ensRegisterSubname({
       parentName,
       label: ensLabel,
       owner,
-      signerLabel: signerKey,
+      signerLabel: signerKey, // = the minter
     });
 
-    // 2. Register the ERC-8004 identity NFT (signed by the agent itself).
+    // 2. Seed the user's Ignis a little gas from the minter so it can do the next two steps.
+    await seedGasIfLow(owner);
+
+    // 3. The user's Ignis registers its OWN ERC-8004 identity + sets its OWN text record.
     const uri = agentCardUri(name);
     const { agentId } = await registerIdentity({ agentURI: uri, signerLabel: ownerKey });
-
-    // 3. Point the ENS name's agent-card text record at the card.
     await setAgentCardRecord({ name, uri, signerLabel: ownerKey });
 
     // 4. Persist the identity onto the wallet record.

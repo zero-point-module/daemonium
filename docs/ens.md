@@ -76,18 +76,25 @@ So a fully-formed dæmon identity is three things:
 the caller must be **the wrapped owner of the parent**, _or_ an operator the owner approved via
 `setApprovalForAll`. This has direct consequences for our cluster:
 
-- To create `ignis.daemonium.eth`, the caller must control **`daemonium.eth`**. The human owns
-  that, so the human does a one-time `NameWrapper.setApprovalForAll(<ignis address>, true)` —
-  after which **Ignis's server wallet** can mint its own name and any siblings under
-  `daemonium.eth`.
-- To create `research.ignis.daemonium.eth`, the caller must control **`ignis.daemonium.eth`** —
-  which Ignis now owns, so **Ignis signs it itself**. No human approval needed for Ignis's own
-  subtree.
+- To create `ignis-<id>.daemonium.eth`, the caller must control **`daemonium.eth`** — owned by
+  the human. We **don't** approve each user's Ignis individually (that wouldn't scale: every
+  user is a fresh address). Instead we use a **minter**: one backend wallet (`app/lib/minter.ts`)
+  that the parent's owner approves **once** via `NameWrapper.setApprovalForAll(<minter>, true)`.
+  After that the minter mints every user's root subname — with `owner` set to that user's Ignis —
+  so each user still **owns** its own name without any per-user approval.
+- To create `research.ignis-<id>.daemonium.eth`, the caller must control the user's own Ignis
+  name — which that Ignis now owns, so **Ignis signs it itself**. No minter, no human approval
+  for a user's own subtree.
 
-That's the trust boundary made literal: you can only mint under a name you control. We exposed a
-read-only check, `GET /api/daemon/ens-status`, that reads `ownerOf` + `isApprovedForAll` and
-tells you whether Ignis is authorized yet (and, usefully, confirms the parent is wrapped — if
-it weren't, `ownerOf` would revert).
+That's the trust boundary made literal: you can only mint under a name you control. `setApprovalForAll`
+is **per-operator, not per-name**, which is exactly why one approved minter covers unlimited users.
+`GET /api/daemon/ens-status` reports the minter's approval + balance (the real gating factors) and
+the caller's own Ignis; it confirms the parent is wrapped (if it weren't, `ownerOf` would revert).
+
+The minter also **seeds each user's Ignis a little gas** at claim time (`claimIdentity` in
+`app/lib/actions.ts`), so the user's Ignis can register its own ERC-8004 NFT + text record without
+the user pre-funding gas. The minter pays for the root mint; the one-time human setup is just
+"approve the minter + keep it funded with Sepolia ETH."
 
 One more source-verified rule: **every intermediate parent must itself be wrapped**. Subnames
 minted via NameWrapper are auto-wrapped, so once `daemonium.eth` is wrapped, the whole cluster

@@ -54,13 +54,18 @@ All except `agent-card` require `Authorization: Bearer <Dynamic token>`.
    "claim your identity", "spawn a research sub-agent". (The token is attached automatically by the
    client; to call routes via curl you need `Authorization: Bearer <getAuthToken()>`.)
 
-## Two manual prerequisites for the funded flows (per user)
-Because each user has their own Ignis, these are per-user. Get your Ignis address from the console
-("what's your identity?") or `GET /api/daemon/ens-status`, then:
-1. **Fund your Ignis** (gas + tokens): send Sepolia ETH and Circle test USDC to that address.
-2. **ENS authority**: from the wallet that owns `daemonium.eth`, call
-   `setApprovalForAll(<your ignis address>, true)` on the NameWrapper
-   `0x0635513f179D50A207757E05759CbD106d7dFcE8` (Sepolia). Check with `/api/daemon/ens-status`.
+## Setup (ONE-TIME) + per-user funding
+ENS provisioning is automated by a **minter** wallet — the parent owner approves it once and then
+every user is provisioned with no further approval. `GET /api/daemon/ens-status` prints the minter
+address + approval/balance status and the how-to. One-time:
+1. **Approve the minter**: from the wallet that owns `daemonium.eth`, call
+   `setApprovalForAll(<minter address>, true)` on the NameWrapper
+   `0x0635513f179D50A207757E05759CbD106d7dFcE8` (Sepolia).
+2. **Fund the minter** with Sepolia ETH — it pays for every user's subname mint and seeds each
+   user's Ignis a little gas for its ERC-8004 + text record.
+
+Per user, only **USDC funding** remains manual (you can't auto-hand out value): to send USDC, a
+user funds their own Ignis with test USDC. Identity-claim gas is auto-seeded by the minter.
 
 ## Verified working (no funds needed)
 Per-user wallet creation + persistence + idempotent reload; JWT auth gate (401 on missing/bad

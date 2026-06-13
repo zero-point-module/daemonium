@@ -55,6 +55,11 @@ export const AGENT_MODEL = "anthropic/claude-sonnet-4.6";
 /** Sepolia ETH a parent seeds a freshly spawned sub-agent with, so it can pay its own gas. */
 export const SUBAGENT_GAS_SEED = "0.01"; // in ETH
 
+/** ETH the minter seeds a user's Ignis at identity-claim time (covers ERC-8004 + text record). */
+export const IGNIS_GAS_SEED = "0.02"; // in ETH
+/** If an agent's ETH balance is below this, seed it. Avoids re-seeding on every claim. */
+export const GAS_SEED_THRESHOLD = "0.005"; // in ETH
+
 /** Public base URL of this app. Set APP_BASE_URL on deploy so agent-card URIs resolve. */
 export const APP_BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:3000";
 
