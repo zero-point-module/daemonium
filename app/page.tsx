@@ -76,12 +76,17 @@ export default function Home() {
   const messages = useMemo<ChatMessage[]>(() => {
     const last = d.messages[d.messages.length - 1];
     if (!last || last.role !== 'ignis') return d.messages;
-    if (d.busy || voice.isSpeaking) {
+    // Only gate the last bubble on the synced caption when it IS the turn being voiced.
+    // d.caption is the in-flight assistant line — null when the latest turn is a user or
+    // internal message (e.g. a proactive nudge, whose user turn is filtered out), so a prior
+    // reply stays on screen instead of blinking out during the pre-audio gap.
+    const inFlight = !!d.caption;
+    if (inFlight && (d.busy || voice.isSpeaking)) {
       const head = d.messages.slice(0, -1);
       return voice.caption ? [...head, { ...last, text: voice.caption }] : head;
     }
     return d.messages;
-  }, [d.messages, voice.caption, d.busy, voice.isSpeaking]);
+  }, [d.messages, d.caption, voice.caption, d.busy, voice.isSpeaking]);
 
   const handleTap = useCallback(() => {
     voice.unlock();
