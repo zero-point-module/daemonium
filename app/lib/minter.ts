@@ -14,6 +14,7 @@ import { ensureAgentWallet, getSigner, seedWalletMetadata } from "./dynamic-serv
 import { identityClient } from "./evm";
 import { IGNIS_GAS_SEED, GAS_SEED_THRESHOLD } from "./chain";
 import { getWallet, putWallet, type StoredWallet } from "./wallet-store";
+import { withLock } from "./lock";
 
 /** Reserved store key for the minter (not an ENS name — it never gets one). */
 export const MINTER_KEY = "minter";
@@ -69,16 +70,21 @@ export async function ensureMinter(): Promise<StoredWallet> {
  * the target already has enough. Returns the funding tx hash, or null if nothing was needed.
  */
 export async function seedGasIfLow(target: Address): Promise<`0x${string}` | null> {
-  const balance = await identityClient.getBalance({ address: target });
-  if (balance >= parseEther(GAS_SEED_THRESHOLD)) return null;
-  await ensureMinter();
-  const minter = await getSigner(MINTER_KEY);
-  const hash = await minter.sendTransaction({
-    to: target,
-    value: parseEther(IGNIS_GAS_SEED),
-    account: minter.account!,
-    chain: minter.chain,
+  // Serialize ALL minter sends: the minter is one EOA, so concurrent spawns/provisions would
+  // otherwise fetch the same nonce and collide ("nonce too low"). Re-checking the balance inside
+  // the lock also stops two callers from double-seeding the same target.
+  return withLock("minter", async () => {
+    const balance = await identityClient.getBalance({ address: target });
+    if (balance >= parseEther(GAS_SEED_THRESHOLD)) return null;
+    await ensureMinter();
+    const minter = await getSigner(MINTER_KEY);
+    const hash = await minter.sendTransaction({
+      to: target,
+      value: parseEther(IGNIS_GAS_SEED),
+      account: minter.account!,
+      chain: minter.chain,
+    });
+    await identityClient.waitForTransactionReceipt({ hash });
+    return hash;
   });
-  await identityClient.waitForTransactionReceipt({ hash });
-  return hash;
 }

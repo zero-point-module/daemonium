@@ -5,7 +5,7 @@
  * client never supplies amounts/addresses or signs — it only references a proposal the server
  * already minted for that same user. This is the confirmation gate.
  */
-import { takeExecution } from "@/app/lib/executions";
+import { peekExecution, consumeExecution } from "@/app/lib/executions";
 import { executeProposal } from "@/app/lib/actions";
 import { verifyUser, AuthError } from "@/app/lib/auth";
 import type { ExecuteRequest } from "@/app/lib/types";
@@ -29,7 +29,8 @@ async function postHandler(req: Request) {
     return Response.json({ ok: false, error: "executionId required" }, { status: 400 });
   }
 
-  const entry = takeExecution(body.executionId);
+  // Look up WITHOUT consuming — so a wrong-owner or losing-race tap can't burn a valid proposal.
+  const entry = peekExecution(body.executionId);
   if (!entry) {
     return Response.json(
       { ok: false, error: "Unknown or already-used executionId" },
@@ -40,6 +41,9 @@ async function postHandler(req: Request) {
   if (entry.userId !== userId) {
     return Response.json({ ok: false, error: "Not your proposal" }, { status: 403 });
   }
+  // Single-use: consume it now, synchronously (no await before this), so a double-tap can't
+  // double-execute — but only AFTER the owner check, so a wrong caller never consumes it.
+  consumeExecution(body.executionId);
 
   const result = await executeProposal(entry.card);
   return Response.json(result, { status: result.ok ? 200 : 500 });

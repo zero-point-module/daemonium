@@ -34,9 +34,14 @@ export function createExecution(
   return card;
 }
 
-/** Fetch and remove a pending execution (single-use). */
-export function takeExecution(executionId: string): Entry | undefined {
-  const entry = pending.get(executionId);
-  if (entry) pending.delete(executionId);
-  return entry;
+/** Look up a pending execution WITHOUT consuming it, so an unauthorized or losing-race tap can't
+ *  burn a valid proposal before the caller has been checked. */
+export function peekExecution(executionId: string): Entry | undefined {
+  return pending.get(executionId);
+}
+
+/** Remove a pending execution (single-use). Call synchronously, after the owner check and right
+ *  before running it, so a double-tap can't double-execute. */
+export function consumeExecution(executionId: string): void {
+  pending.delete(executionId);
 }

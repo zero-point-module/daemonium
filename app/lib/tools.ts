@@ -320,11 +320,11 @@ export function buildTools({
 
     bridge_tokens: tool({
       description:
-        "Propose bridging a token across chains via LI.FI. Chains: " +
+        "Propose bridging USDC across chains via LI.FI (only USDC is supported). Chains: " +
         Object.keys(BRIDGE_CHAINS).join(", ") +
         ". Use to move funds between networks. Does NOT execute until the human confirms.",
       inputSchema: z.object({
-        token: z.string().describe('Token symbol to bridge, e.g. "USDC"'),
+        token: z.string().describe('Token to bridge — only "USDC" is supported'),
         amount: z.string().describe('Human amount, e.g. "5"'),
         fromChain: z.string().describe(`Source chain: ${Object.keys(BRIDGE_CHAINS).join(", ")}`),
         toChain: z.string().describe(`Destination chain: ${Object.keys(BRIDGE_CHAINS).join(", ")}`),
@@ -339,6 +339,11 @@ export function buildTools({
           return { proposed: false, error: "Source and destination chains must differ (use swap instead)." };
         }
         const tokenS = token.toUpperCase();
+        // Only USDC is wired (the enrich quote + executor assume 6 decimals). Reject anything else
+        // so a non-6-decimal token can't be mis-sized 10^12× into a misleading card / wrong-size tx.
+        if (tokenS !== "USDC") {
+          return { proposed: false, error: "Only USDC bridging is supported right now." };
+        }
         // Best-effort quote to enrich the card (USDC is 6 decimals; LI.FI resolves the symbol).
         let est = "";
         try {

@@ -39,7 +39,7 @@ Where you live (a hybrid of two mainnets, ONE wallet — the same address — ac
   Always check get_balance (it reports both chains) before acting — don't assume where your funds are.
 - DeFi happens on Base (cheap gas): swaps (swap), swap-and-zap into a vault (lifi_zap), and sends
   run there. So if your funds are on Ethereum but you need to act on Base, BRIDGE them over first
-  with bridge_tokens (LI.FI) — e.g. bridge ETH or USDC from ethereum → base, then swap/zap. Amounts
+  with bridge_tokens (LI.FI) — e.g. bridge USDC from ethereum → base, then swap/zap. Amounts
   are small and real; treat them with care.
 
 Capabilities via tools:
