@@ -101,6 +101,7 @@ export function useMic({
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const startingRef = useRef(false); // guards double-taps during the async start
+  const discardNextRef = useRef(false); // tear down the next stop() WITHOUT uploading
 
   // Keep callbacks current without making start/stop depend on them (stable handlers).
   const onTranscriptRef = useRef(onTranscript);
@@ -190,6 +191,8 @@ export function useMic({
           if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
         };
         recorder.onstop = () => {
+          const discard = discardNextRef.current;
+          discardNextRef.current = false;
           // Prefer the recorder's negotiated type; fall back to the first chunk's.
           const type =
             recorder.mimeType || chunksRef.current[0]?.type || "audio/mp4";
@@ -198,7 +201,9 @@ export function useMic({
           recorderRef.current = null;
           releaseStream();
           setRecording(false);
-          if (blob.size > 0) void upload(blob);
+          // `discard` = interrupted because Ignis began speaking; don't transcribe the
+          // half-captured audio into a spurious turn.
+          if (!discard && blob.size > 0) void upload(blob);
         };
         recorder.onerror = () => {
           fail("Recording error");
@@ -244,9 +249,17 @@ export function useMic({
     else start();
   }, [start, stop]);
 
-  // If Ignis starts speaking mid-capture, drop the recording (half-duplex).
+  // If Ignis starts speaking mid-capture, drop the recording (half-duplex) WITHOUT uploading
+  // the partial audio. Only flag discard when a real recorder exists; a still-arming start has
+  // captured nothing, and stop() there just cancels the pending getUserMedia.
   useEffect(() => {
-    if (isSpeaking && (recorderRef.current || startingRef.current)) stop();
+    if (!isSpeaking) return;
+    if (recorderRef.current) {
+      discardNextRef.current = true;
+      stop();
+    } else if (startingRef.current) {
+      stop();
+    }
   }, [isSpeaking, stop]);
 
   // Clean up the mic on unmount so the track/indicator never leaks.
