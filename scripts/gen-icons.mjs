@@ -44,6 +44,21 @@ async function squareIcon(size, scale) {
     .toBuffer();
 }
 
+/**
+ * Render the flame centered on a TRANSPARENT square → PNG buffer. Used for the browser-tab
+ * favicon and icon.png, so the flame sits cleanly on any tab color instead of a black box.
+ * (Apple-touch + maskable icons stay opaque: iOS fills transparency with black, and a maskable
+ * icon must be full-bleed.)
+ */
+async function flameOnTransparent(size, scale) {
+  const inner = Math.round(size * scale);
+  const flame = await sharp(SRC).resize(inner, inner, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
+  return sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+    .composite([{ input: flame, gravity: "center" }])
+    .png()
+    .toBuffer();
+}
+
 /** Assemble a valid .ico holding PNG-encoded entries (modern browsers read PNG-in-ICO). */
 function buildIco(images) {
   const header = Buffer.alloc(6);
@@ -103,19 +118,22 @@ async function socialCard() {
 async function main() {
   await mkdir("public/icons", { recursive: true });
 
-  // Modern favicon + iOS + PWA icons.
-  await writeFile("app/icon.png", await squareIcon(512, 0.82));
+  // Browser-tab favicon: flame on TRANSPARENT, so it reads on any tab color (no black box).
+  await writeFile("app/icon.png", await flameOnTransparent(512, 0.9));
+
+  // iOS + PWA icons stay on the dark ember backdrop (transparency renders as black on iOS, and
+  // the maskable icon must be full-bleed).
   await writeFile("app/apple-icon.png", await squareIcon(180, 0.8));
   await writeFile("public/icons/icon-192.png", await squareIcon(192, 0.82));
   await writeFile("public/icons/icon-512.png", await squareIcon(512, 0.82));
   // Maskable: extra padding so Android's circle/squircle mask never clips the flame.
   await writeFile("public/icons/maskable-512.png", await squareIcon(512, 0.6));
 
-  // Legacy favicon.ico — bigger flame at tiny sizes so it stays legible.
+  // Legacy favicon.ico — also transparent; bigger flame at tiny sizes so it stays legible.
   const ico = buildIco([
-    { size: 16, data: await squareIcon(16, 0.92) },
-    { size: 32, data: await squareIcon(32, 0.9) },
-    { size: 48, data: await squareIcon(48, 0.88) },
+    { size: 16, data: await flameOnTransparent(16, 0.96) },
+    { size: 32, data: await flameOnTransparent(32, 0.94) },
+    { size: 48, data: await flameOnTransparent(48, 0.92) },
   ]);
   await writeFile("app/favicon.ico", ico);
 

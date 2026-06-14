@@ -20,10 +20,8 @@ const jetbrainsMono = JetBrains_Mono({
 // repeated here. (Regenerate them from the idle flame with `node scripts/gen-icons.mjs`.)
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: {
-    default: SITE_TITLE,
-    template: `%s · ${SITE_NAME}`,
-  },
+  // The browser-tab title is just "Daemonium" on every page (no per-page suffix/template).
+  title: SITE_NAME,
   description: SITE_DESCRIPTION,
   applicationName: SITE_NAME,
   keywords: [
