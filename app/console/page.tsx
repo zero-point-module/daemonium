@@ -28,7 +28,7 @@ export default function DevConsolePage() {
         {!user ? (
           <p className="text-sm text-zinc-400">
             Sign in above to summon Ignis. Login provisions your embedded wallet
-            on Sepolia.
+            — one MPC address across Ethereum mainnet and Base.
           </p>
         ) : (
           <section className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-4 text-sm">
