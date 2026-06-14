@@ -1,8 +1,9 @@
 # LI.FI — letting a dæmon move and deploy value across DeFi
 
 > _What we're doing, why, and the technical detail — grounded in the code we actually run._
+> Big picture + diagrams: [`architecture.md`](./architecture.md).
 
-## The one-line idea
+## The idea
 
 A dæmon that holds value should be able to **put it to work** and **move it where it's needed** —
 not just send it. LI.FI gives Ignis two confirm-gated DeFi powers on **Base mainnet**:
@@ -14,7 +15,7 @@ not just send it. LI.FI gives Ignis two confirm-gated DeFi powers on **Base main
 Both follow the same propose → human-confirm → execute contract as every other action (see
 [`dynamic.md`](./dynamic.md)); only `POST /api/daemon/execute` ever signs.
 
-## What LI.FI Composer is
+## LI.FI Composer
 
 Composer lets you express a **Flow** — an ordered graph of operations — and compile it server-side
 into a **single executable transaction**. The pieces:

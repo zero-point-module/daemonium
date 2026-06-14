@@ -1,8 +1,9 @@
 # Dynamic — how a dæmon owns and controls its own wallet
 
 > _What we're doing, why, and the technical detail — grounded in the code we actually run._
+> Big picture + diagrams: [`architecture.md`](./architecture.md).
 
-## The one-line idea
+## The idea
 
 **The agent _is_ the wallet; Dynamic is the manager.** Ignis isn't a program that asks a
 human's wallet to sign — Ignis _has its own wallet_ and signs autonomously on the server.
@@ -25,7 +26,7 @@ infrastructure, no policy, no recovery. Fine as a fallback; not the story we wan
 Dynamic's **server wallets** give us the best of both: a wallet the _backend_ controls
 programmatically, but whose private key never exists in one piece anywhere.
 
-## The crypto concept: MPC / threshold signatures (TSS)
+## MPC / threshold signatures (TSS)
 
 A server wallet is an **MPC (multi-party computation)** wallet using **TSS (threshold
 signature scheme)**. Instead of one private key, the key is mathematically split into
@@ -70,7 +71,7 @@ So there are **two kinds of wallet** in Daemonium:
 | Embedded wallet | the human | frontend (React SDK) | login, approver, funding source |
 | Server wallet | each agent | backend (node-evm SDK) | the agent's own funds + identity |
 
-## The most important technical fact: **Dynamic is the wallet store** (we persist almost nothing)
+## **Dynamic is the wallet store** (we persist almost nothing)
 
 `createWalletAccount` returns and **then forgets** everything — but we lean on Dynamic so hard that
 we persist **no wallet data at all**, not even metadata. Two facts make this work:
@@ -175,24 +176,10 @@ built-in `needsApproval`. Why: the client physically cannot sign (it has no shar
 mis-wired or jailbroken agent still can't move funds — the gate is a hard boundary, not a UX
 affordance. There is exactly one auditable choke point.
 
-## A gotcha we hit (and the lesson)
 
-The MPC SDK pulls in native/WASM attestation modules (`@evervault/wasm-attestation-bindings`).
-Next.js/Turbopack tried to **bundle** the `.wasm` and failed with `Module not found: 'wbg'`.
-Fix: tell Next to leave these packages as runtime requires instead of bundling them —
+any server SDK with native/WASM bits usually needs `serverExternalPackages` in Next.
 
-```ts
-// next.config.ts
-serverExternalPackages: [
-  "@dynamic-labs-wallet/node-evm", "@dynamic-labs-wallet/node",
-  "@dynamic-labs-wallet/core", "@dynamic-labs-wallet/primitives",
-  "@evervault/wasm-attestation-bindings",
-],
-```
-
-Lesson: any server SDK with native/WASM bits usually needs `serverExternalPackages` in Next.
-
-## What we learned
+## What we found
 
 - Server wallets make "an agent that owns value" real, without a bare private key.
 - MPC/TSS means the key is never whole anywhere — signing is a _protocol_. With

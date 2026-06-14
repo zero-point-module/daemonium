@@ -1,8 +1,9 @@
 # ENS — giving a dæmon a name, and a cluster an org chart
 
 > _What we're doing, why, and the technical detail — grounded in the code we actually run._
+> Big picture + diagrams: [`architecture.md`](./architecture.md).
 
-> ## ✅ Status: the on-chain cluster is REAL on Ethereum L1
+> ## the on-chain cluster on Ethereum L1
 > Identity (the ENS cluster + ERC-8004 + the agent wallet) lives on **Ethereum mainnet**, where
 > ENS still runs **v1 with a LIVE NameWrapper** (`0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401`).
 > So `NameWrapper.setSubnodeRecord` subname minting **works today** — unlike Sepolia, which froze
@@ -19,7 +20,7 @@
 > to a label; it never blocks the dæmon. The prerequisites (register + wrap `daemonium.eth`, approve
 > the minter) are spelled out at the end.
 
-## The one-line idea
+## The idea
 
 A wallet address (`0x0FD5…fDbc`) is unreadable and says nothing about _who_ an agent is. We give
 each dæmon an **ENS name** as its identity backbone — `<handle>.daemonium.eth` — and when it spawns
@@ -33,7 +34,6 @@ Alice's dæmon cluster" = "allowed to interact." A name isn't decoration; it's s
 > **handle** and their dæmon IS `<handle>.daemonium.eth` — minted directly under the parent and
 > owned by that user's dæmon wallet. So the cluster is 3 levels:
 > `daemonium.eth` → `<handle>.daemonium.eth` (the dæmon) → `research.<handle>.daemonium.eth` (a sub-agent).
-> (We dropped an earlier `ignis.` level — the dæmon _is_ the handle name now.) The full ENS name is
 > the agent's key everywhere (store key, signer key, identity); the `userId → handle` map lives in
 > `app/lib/handles.ts`. Identity is **auto-claimed** at handle pick (`app/lib/provision.ts`) — no confirm.
 
@@ -47,7 +47,7 @@ Alice's dæmon cluster" = "allowed to interact." A name isn't decoration; it's s
    - `namehash("research.alice.daemonium.eth")` = a recursive hash of all labels → a `bytes32`
      **node** that identifies the name everywhere in ENS.
    - We use viem's helpers: `namehash(normalize(name))` and `labelhash(normalize(label))`.
-4. **The NameWrapper** — the modern way to own names. It "wraps" a name into an **ERC-1155 NFT**,
+4. **The NameWrapper** — It "wraps" a name into an **ERC-1155 NFT**,
    which (a) makes ownership transferable like a token, (b) lets the owner mint **subnames**
    cheaply, and (c) adds **fuses** — permission bits an owner can _burn_ to permanently restrict
    what can be done to a name.

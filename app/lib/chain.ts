@@ -129,8 +129,8 @@ export const AGENT_MODEL = process.env.AGENT_MODEL ?? "anthropic/claude-sonnet-4
 
 /* Gas seeds on the IDENTITY chain (L1) — real ETH, kept lean. Covers a dæmon's own ERC-8004
  * register + ENS text record; the minter pays subname mints. Tune for live gas. */
-export const SUBAGENT_GAS_SEED = "0.001"; // ETH a parent seeds a freshly spawned sub-agent
-export const IGNIS_GAS_SEED = "0.002"; // ETH the minter seeds a user's dæmon at claim time
+export const SUBAGENT_GAS_SEED = "0.0001"; // ETH a parent seeds a freshly spawned sub-agent
+export const IGNIS_GAS_SEED = "0.001"; // ETH the minter seeds a user's dæmon at claim time
 export const GAS_SEED_THRESHOLD = "0.0015"; // seed only if balance is below this
 
 /** Public base URL of this app. Set APP_BASE_URL on deploy so agent-card URIs resolve. */
