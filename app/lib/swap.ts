@@ -21,8 +21,6 @@ export interface SwapQuote {
   from: { amount: string; amountUSD?: string; token: { address: string; symbol: string; decimals: number } };
   to: { amount: string; amountUSD?: string; token: { address: string; symbol: string; decimals: number } };
   gasCostUSD?: string;
-  /** ERC-20 spender to approve (present only when an approval is needed). */
-  approvalAddress?: Address;
   signingPayload: {
     chainId: number;
     chainName: string;

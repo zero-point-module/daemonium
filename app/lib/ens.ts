@@ -46,11 +46,6 @@ export async function subnameExists(name: string): Promise<boolean> {
   return owner !== "0x0000000000000000000000000000000000000000";
 }
 
-/** Strip the leftmost label: "research.ignis.daemonium.eth" → "ignis.daemonium.eth". */
-export function parentOf(name: string): string {
-  return name.split(".").slice(1).join(".");
-}
-
 /**
  * Can `operator` modify (create subnames under) `parentName` in the NameWrapper?
  * True if it is the wrapped owner or an approved operator of the owner.

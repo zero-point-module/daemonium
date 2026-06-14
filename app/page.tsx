@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { Flame } from '@/components/Flame';
 import { IdentityBadge } from '@/components/IdentityBadge';
 import { StatusPill } from '@/components/StatusPill';
