@@ -9,10 +9,11 @@
 import "server-only";
 import { tool } from "ai";
 import { z } from "zod";
-import { erc20Abi, formatEther, formatUnits, isAddress, type Address } from "viem";
+import { erc20Abi, formatEther, formatUnits, isAddress, parseUnits, type Address } from "viem";
 import { normalize } from "viem/ens";
 import { publicClient, getIncomingUsdc } from "./evm";
-import { USDC } from "./chain";
+import { USDC, SWAP_TOKENS } from "./chain";
+import { getSwapQuote } from "./swap";
 import { getWallet } from "./wallet-store";
 import { createExecution } from "./executions";
 import { runSubagent } from "./subagent";
@@ -141,6 +142,98 @@ export function buildTools({
             agent: selfKey,
             summary: `Send ${amount} USDC to ${toEns ?? resolved}`,
             details: { action: "send_usdc", to: resolved, amount, toEns },
+          },
+          userId,
+        );
+        emit({ type: "proposal", card });
+        return {
+          proposed: true,
+          executionId: card.executionId,
+          note: `Proposed: ${card.summary}. Awaiting the human's confirmation.`,
+        };
+      },
+    }),
+
+    send_eth: tool({
+      description:
+        "Propose sending native ETH from your wallet to an address or ENS name (for gas, or " +
+        "to fund another agent). This does NOT send — it asks the human to confirm.",
+      inputSchema: z.object({
+        to: z.string().describe("Recipient: a 0x address or an ENS name"),
+        amount: z.string().describe('ETH amount as a string, e.g. "0.01"'),
+      }),
+      execute: async ({ to, amount }) => {
+        let resolved: string | null = isAddress(to) ? to : null;
+        let toEns: string | undefined;
+        if (!resolved) {
+          try {
+            resolved = await publicClient.getEnsAddress({ name: normalize(to) });
+            if (resolved) toEns = to;
+          } catch {
+            resolved = null;
+          }
+        }
+        if (!resolved) return { proposed: false, error: `Could not resolve recipient "${to}"` };
+
+        const card = createExecution(
+          {
+            action: "send_eth",
+            agent: selfKey,
+            summary: `Send ${amount} ETH to ${toEns ?? resolved}`,
+            details: { action: "send_eth", to: resolved, amount, toEns },
+          },
+          userId,
+        );
+        emit({ type: "proposal", card });
+        return {
+          proposed: true,
+          executionId: card.executionId,
+          note: `Proposed: ${card.summary}. Awaiting the human's confirmation.`,
+        };
+      },
+    }),
+
+    swap: tool({
+      description:
+        "Propose swapping one token for another via Dynamic's Swap API (runs on Base Sepolia). " +
+        "Use for converting between tokens. Supported tokens: " +
+        Object.keys(SWAP_TOKENS).join(", ") +
+        ". Does NOT execute until the human confirms.",
+      inputSchema: z.object({
+        fromSymbol: z.string().describe("Token to swap FROM, e.g. WETH"),
+        toSymbol: z.string().describe("Token to swap TO, e.g. ETH"),
+        amount: z.string().describe('Amount of the from-token, e.g. "0.001"'),
+      }),
+      execute: async ({ fromSymbol, toSymbol, amount }) => {
+        const fromS = fromSymbol.toUpperCase();
+        const toS = toSymbol.toUpperCase();
+        const from = SWAP_TOKENS[fromS];
+        const to = SWAP_TOKENS[toS];
+        if (!from || !to) {
+          return { proposed: false, error: `Supported tokens: ${Object.keys(SWAP_TOKENS).join(", ")}` };
+        }
+        // Best-effort quote to enrich the confirm card; the executor re-quotes fresh.
+        let estOut = "";
+        try {
+          const me = await getWallet(selfKey);
+          if (me) {
+            const q = await getSwapQuote({
+              account: me.address as Address,
+              fromToken: from.address,
+              toToken: to.address,
+              fromAmount: parseUnits(amount, from.decimals).toString(),
+            });
+            estOut = ` (~${formatUnits(BigInt(q.to.amount), q.to.token.decimals)} ${toS})`;
+          }
+        } catch {
+          /* no route / quote unavailable — still propose; executor surfaces the error */
+        }
+        const card = createExecution(
+          {
+            action: "swap",
+            agent: selfKey,
+            summary: `Swap ${amount} ${fromS} → ${toS}${estOut} on Base Sepolia`,
+            details: { action: "swap", fromSymbol: fromS, toSymbol: toS, amount },
           },
           userId,
         );

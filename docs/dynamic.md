@@ -136,10 +136,17 @@ server; only the public `NEXT_PUBLIC_DYNAMIC_ENVIRONMENT_ID` reaches the browser
 
 ## Where the human comes back in: the confirm gate
 
-Autonomy is powerful and dangerous, so safety is structural, not cosmetic. The agent's tools
-**never sign** — `send_usdc` only _proposes_ (mints a `ProposalCard` with an opaque
-`executionId` and emits a `proposal` event). The **only** code that loads key shares and signs
-is one route, `POST /api/daemon/execute`, which runs after the human taps Confirm.
+Autonomy is powerful and dangerous, so safety is structural, not cosmetic. The agent's
+state-changing tools **never sign** — they only _propose_ (mint a `ProposalCard` with an opaque
+`executionId` and emit a `proposal` event). The gated actions are **`send_usdc`**, **`send_eth`**
+(native ETH, for gas or funding another agent), **`swap`** (token swap via Dynamic's Swap API —
+runs on **Base Sepolia**, since the Swap API supports it despite the docs saying "mainnet only";
+Ethereum Sepolia is genuinely unsupported. `app/lib/swap.ts` quotes, the executor re-quotes +
+approves + signs on Base Sepolia via the same MPC address), and **`spawn_subagent`**. The **only** code that
+loads key shares and signs is one route, `POST /api/daemon/execute`, which runs after the human
+taps Confirm. (Identity claiming is *not* gated — it's auto-provisioned per-user at handle pick;
+see `docs/ens.md` and `app/lib/provision.ts`. Read-only tools — balance/activity/ENS-resolve/
+delegate-to-subagent — run immediately.)
 
 We chose this **propose/execute split over a private key in the client** _and_ over ai-sdk's
 built-in `needsApproval`. Why: the client physically cannot sign (it has no shares), so a

@@ -2,6 +2,31 @@
 
 > _What we're doing, why, and the technical detail — grounded in the code we actually run._
 
+> ## ⚠️ Sepolia status (June 2026): on-chain ENS is DEFERRED
+> **Sepolia ENS has migrated to ENS v2.** The classic **NameWrapper (v1) is frozen** for new
+> registrations — every wrapping registration controller has been de-authorized on the Sepolia
+> BaseRegistrar, and the live app (`app.ens.dev`) now registers names into a **new v2
+> PermissionedRegistry** (`0xDEDB92913A25abE1f7BCDD85D8A344a43B398B67`), not the NameWrapper. So
+> on canonical Sepolia, `NameWrapper.ownerOf(name)` stays zero and our v1 `setSubnodeRecord`
+> reverts (`Unauthorised`). **Consequence:** our ENS code (below) is correct **v1 NameWrapper**
+> code and works on a network where v1 is live, but on Sepolia the on-chain ENS minting is
+> **best-effort / deferred** — `provisionIdentity` and `spawnSubagent` skip it when the parent
+> isn't manageable, so dæmons still get their **wallet + ERC-8004 identity** (both real on
+> Sepolia) and the ENS name as a human-readable label.
+>
+> **What we shipped (the honest path):** on-chain minting is gated OFF via the
+> `ENS_ONCHAIN_MINTING` flag (`app/lib/chain.ts`, default `false`) — agent ENS names are a
+> naming/org-chart **label layer**, and the **verifiable on-chain identity per agent is its
+> ERC-8004 NFT + wallet**. The parent **`daemonium.eth` IS really registered in ENS v2** (status
+> `registered`, owner `0x8feb8fA1377F0aAB21f617017c106B6E747aBE75` — registered via `app.ens.dev`),
+> which we read + surface honestly via `app/lib/ens-v2.ts` + `GET /api/daemon/ens-status`.
+> A full real v2 subname tree was investigated and is **not feasible on Sepolia now**: v2 has no
+> `setSubnodeRecord` (each non-leaf name needs its own child-registry contract), and the
+> VerifiableFactory / UserRegistry impl / writable v2 resolver have no published Sepolia
+> addresses. Flip `ENS_ONCHAIN_MINTING=true` only on a network where v1 NameWrapper (or a
+> complete v2 path) is live. The design below (cluster = subname tree) is the intended model;
+> only the on-chain registration is blocked by the migration.
+
 ## The one-line idea
 
 A wallet address (`0x0FD5…fDbc`) is unreadable and says nothing about _who_ an agent is. We
