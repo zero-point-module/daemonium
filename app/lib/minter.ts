@@ -12,13 +12,54 @@ import { parseEther, type Address } from "viem";
 import { ensureAgentWallet, getSigner } from "./dynamic-server";
 import { publicClient } from "./evm";
 import { IGNIS_GAS_SEED, GAS_SEED_THRESHOLD } from "./chain";
-import type { StoredWallet } from "./wallet-store";
+import { getWallet, putWallet, type StoredWallet } from "./wallet-store";
 
 /** Reserved store key for the minter (not an ENS name — it never gets one). */
 export const MINTER_KEY = "minter";
 
-export function ensureMinter(): Promise<StoredWallet> {
-  return ensureAgentWallet(MINTER_KEY);
+/**
+ * Optional pin. The minter is a Dynamic MPC wallet, so its address alone can't sign — the key
+ * shares are what sign. Set MINTER_WALLET to a (base64 of, or raw) minter wallet record and
+ * EVERY environment — each local worktree and the deploy — loads that SAME funded + approved
+ * minter, instead of each .daemon store auto-minting its own throwaway. Unset → legacy
+ * behaviour. Capture the value with `npm run minter:export`. The shares are decrypted with
+ * DAEMON_WALLET_PASSWORD, so keep that consistent across environments.
+ */
+function loadPinnedMinter(): StoredWallet | null {
+  const raw = process.env.MINTER_WALLET?.trim();
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    const json = raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf8");
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error("MINTER_WALLET is set but is not valid JSON nor base64-encoded JSON.");
+  }
+  const w = parsed as Partial<StoredWallet>;
+  if (!w.address || !w.walletMetadata || !w.externalServerKeyShares) {
+    throw new Error(
+      "MINTER_WALLET is missing required fields (address, walletMetadata, externalServerKeyShares).",
+    );
+  }
+  const record = w as StoredWallet;
+  return {
+    ...record,
+    label: MINTER_KEY, // always canonical, whatever the export was keyed as
+    createdAt: record.createdAt ?? new Date().toISOString(),
+    children: record.children ?? [],
+  };
+}
+
+export async function ensureMinter(): Promise<StoredWallet> {
+  const pinned = loadPinnedMinter();
+  if (!pinned) return ensureAgentWallet(MINTER_KEY); // legacy: per-store auto-mint
+
+  // Seed the pinned record into THIS store so getSigner(MINTER_KEY) signs as it.
+  const existing = await getWallet(MINTER_KEY);
+  if (existing?.address.toLowerCase() !== pinned.address.toLowerCase()) {
+    await putWallet(pinned);
+  }
+  return pinned;
 }
 
 /**
