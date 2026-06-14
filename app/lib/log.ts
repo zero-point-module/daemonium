@@ -22,11 +22,14 @@ const THRESHOLD =
   (process.env.NODE_ENV === "production" ? ORDER.info : ORDER.debug);
 
 const SECRET_KEY =
-  /(authorization|cookie|api[-_]?key|secret|token|jwt|private[-_]?key|password|passphrase|mnemonic|seed|shares?)/i;
+  /(authorization|cookie|api[-_]?key|secret|token|jwt|private[-_]?key|password|passphrase|mnemonic|seed|shares?|metadata)/i;
 
 /** Strip obviously-sensitive values and expand Errors before anything reaches a log sink. */
 function redact(value: unknown, depth = 0): unknown {
-  if (value == null || depth > 4) return value;
+  if (value == null) return value;
+  // Guard against runaway/cyclic structures — but DON'T return the raw value at the cap,
+  // that would leak an unredacted secret nested deep. Truncate instead.
+  if (depth > 6) return "[truncated]";
   if (value instanceof Error) {
     return { name: value.name, message: value.message, stack: value.stack };
   }
