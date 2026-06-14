@@ -28,7 +28,7 @@ import {
 } from "./chain";
 import { publicClient } from "./evm";
 import { getSwapQuote } from "./swap";
-import { getSigner, createAgentWallet } from "./dynamic-server";
+import { getSigner, ensureAgentWallet } from "./dynamic-server";
 import { seedGasIfLow } from "./minter";
 import {
   registerSubname as ensRegisterSubname,
@@ -37,7 +37,7 @@ import {
   canManageParent,
 } from "./ens";
 import { registerIdentity, ownsIdentity } from "./erc8004";
-import { getWallet, updateWallet } from "./wallet-store";
+import { getWallet, updateWallet, appendChild } from "./wallet-store";
 import type { ProposalCard, ExecuteResponse, SpawnSubagentDetails, SwapDetails } from "./types";
 
 export async function executeProposal(card: ProposalCard): Promise<ExecuteResponse> {
@@ -116,7 +116,12 @@ async function swap(agent: string, details: SwapDetails): Promise<ExecuteRespons
 
     const quote = await getSwapQuote({ account, fromToken: from.address, toToken: to.address, fromAmount });
 
-    const usd = Number(quote.from.amountUSD ?? "0");
+    // Fail CLOSED: if the quote carries no USD notional we can't prove we're under the
+    // cap, so refuse rather than letting `?? "0"` silently wave the swap through.
+    const usd = quote.from.amountUSD != null ? Number(quote.from.amountUSD) : NaN;
+    if (!Number.isFinite(usd)) {
+      return { ok: false, error: "Swap quote returned no USD value; refusing to bypass the cap" };
+    }
     if (usd > SWAP_CAP_USD) {
       return { ok: false, error: `Swap notional $${usd} exceeds the $${SWAP_CAP_USD} cap` };
     }
@@ -186,11 +191,11 @@ async function spawnSubagent(
     if (!parent?.ensName) return { ok: false, error: `No parent "${parentKey}"` };
 
     // 1. The sub-agent's own wallet (it IS this address), linked into the parent's cluster.
-    const child = await createAgentWallet(childKey, { parentEnsName: parent.ensName });
+    //    ensureAgentWallet is idempotent — re-confirming the same spawn returns the existing
+    //    wallet instead of minting a second one and orphaning the first one's key shares.
+    const child = await ensureAgentWallet(childKey, { parentEnsName: parent.ensName });
     const childAddr = child.address as Address;
-    await updateWallet(parentKey, {
-      children: Array.from(new Set([...parent.children, childKey])),
-    });
+    await appendChild(parentKey, childKey);
 
     // 2. Fund the sub-agent + register its ERC-8004 identity. Independent of ENS.
     await seedGasIfLow(childAddr);

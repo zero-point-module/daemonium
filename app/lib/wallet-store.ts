@@ -19,7 +19,7 @@ export interface StoredWallet {
   walletMetadata: WalletMetadata;
   externalServerKeyShares: ServerKeyShare[];
   createdAt: string;
-  // Identity (filled in B3 once ENS/ERC-8004 are wired)
+  // Identity — set during provisioning (ENS name, ERC-8004 id + agent-card URI).
   ensName?: string;
   agentId?: string;
   agentCardUri?: string;
@@ -51,18 +51,6 @@ export async function getWallet(label: string): Promise<StoredWallet | undefined
   return (await readStore())[label];
 }
 
-export async function getWalletByAddress(
-  address: string,
-): Promise<StoredWallet | undefined> {
-  const store = await readStore();
-  const lower = address.toLowerCase();
-  return Object.values(store).find((w) => w.address.toLowerCase() === lower);
-}
-
-export async function listWallets(): Promise<StoredWallet[]> {
-  return Object.values(await readStore());
-}
-
 export function putWallet(w: StoredWallet): Promise<void> {
   // Serialized so concurrent writes to different keys don't clobber the whole file.
   return withLock("wallets", async () => {
@@ -83,6 +71,30 @@ export function updateWallet(
     if (!existing) throw new Error(`No wallet for label "${label}"`);
     const next = { ...existing, ...patch };
     store[label] = next;
+    await writeStore(store);
+    return next;
+  });
+}
+
+/**
+ * Append a child label to a parent's `children`, deduped, ATOMICALLY inside the store lock.
+ * Unlike `updateWallet(parent, { children: [...] })` — where the array is computed from a
+ * snapshot read before the lock — this reads the parent inside the lock, so two concurrent
+ * spawns under the same parent can't clobber each other's child.
+ */
+export function appendChild(
+  parentLabel: string,
+  childLabel: string,
+): Promise<StoredWallet> {
+  return withLock("wallets", async () => {
+    const store = await readStore();
+    const existing = store[parentLabel];
+    if (!existing) throw new Error(`No wallet for label "${parentLabel}"`);
+    const children = existing.children.includes(childLabel)
+      ? existing.children
+      : [...existing.children, childLabel];
+    const next = { ...existing, children };
+    store[parentLabel] = next;
     await writeStore(store);
     return next;
   });
