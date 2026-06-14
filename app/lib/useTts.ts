@@ -19,6 +19,7 @@
  * tap handler (Summon / mic / quick-action buttons) to arm audio for the session.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getAuthToken } from "@dynamic-labs/sdk-react-core";
 
 export interface UseTts {
   /** Speak a line. Interrupts any line currently playing. Resolves when playback ends
@@ -124,9 +125,13 @@ export function useTts(): UseTts {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      const token = getAuthToken();
       const res = await fetch("/api/tts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ text: line, voice }),
         signal: controller.signal,
       });

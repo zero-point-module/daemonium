@@ -12,6 +12,7 @@
  * buffering the whole clip. The API key stays server-side; the browser never sees it.
  */
 import type { TtsRequest } from "@/app/lib/types";
+import { verifyUser, AuthError } from "@/app/lib/auth";
 import { withRoute } from "@/app/lib/observe";
 
 export const runtime = "nodejs";
@@ -34,6 +35,17 @@ const MAX_TEXT_LENGTH = 4096;
 export const POST = withRoute("tts", postHandler);
 
 async function postHandler(req: Request): Promise<Response> {
+  // Same boundary as /api/stt: only an authenticated user can spend our TTS budget.
+  try {
+    await verifyUser(req);
+  } catch (err) {
+    const status = err instanceof AuthError ? err.status : 401;
+    return Response.json(
+      { error: err instanceof Error ? err.message : "Unauthorized" },
+      { status },
+    );
+  }
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     // Don't crash the app if the key is absent — fail clearly and let the client
