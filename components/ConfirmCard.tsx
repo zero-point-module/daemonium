@@ -1,58 +1,127 @@
+import type { ReactNode } from 'react';
 import type { ProposalCard } from '@/app/lib/types';
 
 /**
- * The human-confirmation gate. The agent PROPOSES; this renders the proposal and
- * waits. A confirm tap sends back only the opaque `executionId` (never a built
- * transaction) — the server route is the sole signer. This is the entire
- * confirm-before-act contract, made visible.
+ * The human-confirmation gate. The agent PROPOSES; this renders the proposal and waits. A
+ * confirm tap sends back only the opaque `executionId` (never a built transaction) — the server
+ * route is the sole signer. This is the entire confirm-before-act contract, made visible.
+ *
+ * The card reads as a single onchain MOVE: a per-action glyph, then a from → to flow (what
+ * leaves, where it lands), tinted to the live room color (var(--state)) so it belongs to the
+ * flame it rose from.
  */
 
 const ACTION_LABEL: Record<ProposalCard['action'], string> = {
   send_usdc: 'Send USDC',
   send_eth: 'Send ETH',
   swap: 'Swap',
-  spawn_subagent: 'Spawn sub-agent',
+  spawn_subagent: 'Summon sub-dæmon',
   lifi_zap: 'Swap & Zap',
   lifi_bridge: 'Bridge',
 };
 
-function detailRows(proposal: ProposalCard): { label: string; value: string }[] {
+const short = (a: string) => (a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
+
+interface Endpoint {
+  value: string;
+  caption: string;
+}
+interface Flow {
+  from: Endpoint;
+  to: Endpoint;
+  /** A small context line under the flow (chain, purpose), optional. */
+  note?: string;
+}
+
+/** Turn a proposal into the from → to flow shown on the card. */
+function flowFor(proposal: ProposalCard): Flow {
   const d = proposal.details;
   switch (d.action) {
     case 'send_usdc':
-      return [
-        { label: 'Amount', value: `${d.amount} USDC` },
-        { label: 'To', value: d.toEns ?? d.to },
-      ];
+      return {
+        from: { value: `${d.amount} USDC`, caption: 'leaves you' },
+        to: { value: d.toEns ?? short(d.to), caption: 'recipient' },
+        note: 'on Base',
+      };
     case 'send_eth':
-      return [
-        { label: 'Amount', value: `${d.amount} ETH` },
-        { label: 'To', value: d.toEns ?? d.to },
-      ];
+      return {
+        from: { value: `${d.amount} ETH`, caption: 'leaves you' },
+        to: { value: d.toEns ?? short(d.to), caption: 'recipient' },
+        note: 'on Base',
+      };
     case 'swap':
-      return [
-        { label: 'Swap', value: `${d.amount} ${d.fromSymbol}` },
-        { label: 'For', value: d.toSymbol },
-        { label: 'Chain', value: 'Base' },
-      ];
-    case 'spawn_subagent':
-      return [
-        { label: 'Agent', value: d.label },
-        { label: 'Purpose', value: d.purpose },
-      ];
+      return {
+        from: { value: `${d.amount} ${d.fromSymbol}`, caption: 'you pay' },
+        to: { value: d.toSymbol, caption: 'you get' },
+        note: 'Swap on Base',
+      };
     case 'lifi_zap':
-      return [
-        { label: 'Deposit', value: `${d.amount} ${d.fromSymbol}` },
-        { label: 'Into', value: d.vaultLabel },
-        { label: 'Chain', value: 'Base' },
-      ];
+      return {
+        from: { value: `${d.amount} ${d.fromSymbol}`, caption: 'deposit' },
+        to: { value: d.vaultLabel, caption: 'into vault' },
+        note: 'Earn yield · Base',
+      };
     case 'lifi_bridge':
-      return [
-        { label: 'Bridge', value: `${d.amount} ${d.token}` },
-        { label: 'From', value: d.fromChain },
-        { label: 'To', value: d.toChain },
-      ];
+      return {
+        from: { value: `${d.amount} ${d.token}`, caption: `from ${d.fromChain}` },
+        to: { value: d.toChain, caption: 'arrives on' },
+        note: 'Cross-chain bridge',
+      };
+    case 'spawn_subagent':
+      return {
+        from: { value: d.parentKey.split('.')[0], caption: 'parent' },
+        to: { value: d.label, caption: 'new dæmon' },
+        note: d.purpose,
+      };
   }
+}
+
+/** A small stroked glyph per action, in the live state color. */
+function ActionGlyph({ action }: { action: ProposalCard['action'] }) {
+  const paths: Record<ProposalCard['action'], ReactNode> = {
+    send_usdc: <path d="M5 12h12m0 0-5-5m5 5-5 5" />,
+    send_eth: <path d="M5 12h12m0 0-5-5m5 5-5 5" />,
+    swap: (
+      <>
+        <path d="M5 8h12l-3-3M19 16H7l3 3" />
+      </>
+    ),
+    lifi_zap: <path d="M13 3 5 13h6l-1 8 9-12h-7z" />,
+    lifi_bridge: <path d="M3 16v-1a9 9 0 0 1 18 0v1M3 16h18M7 16v4M17 16v4" />,
+    spawn_subagent: <path d="M12 4l1.7 5.1L19 11l-5.3 1.9L12 18l-1.7-5.1L5 11l5.3-1.9z" />,
+  };
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {paths[action]}
+    </svg>
+  );
+}
+
+/** One side of the flow — a glassy chip with the value over a tiny role caption. */
+function FlowChip({ endpoint, align }: { endpoint: Endpoint; align: 'left' | 'right' }) {
+  return (
+    <div
+      className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2"
+      style={{ textAlign: align }}
+    >
+      <div className="truncate font-mono text-[14px] leading-tight text-white/90">
+        {endpoint.value}
+      </div>
+      <div className="mt-0.5 text-[10px] uppercase tracking-[0.6px] text-white/40">
+        {endpoint.caption}
+      </div>
+    </div>
+  );
 }
 
 export function ConfirmCard({
@@ -66,43 +135,84 @@ export function ConfirmCard({
   onConfirm: (executionId: string) => void;
   onDismiss: () => void;
 }) {
+  const flow = flowFor(proposal);
   return (
     <div
       role="dialog"
       aria-label="Confirm action"
-      className="w-full max-w-sm rounded-2xl border bg-white/[0.05] p-4 backdrop-blur-md"
+      className="w-full max-w-sm rounded-[22px] border p-4 backdrop-blur-md"
       style={{
-        borderColor: 'color-mix(in srgb, var(--state, #ff7a18) 40%, transparent)',
-        boxShadow: '0 0 28px color-mix(in srgb, var(--state, #ff7a18) 16%, transparent)',
+        borderColor: 'color-mix(in srgb, var(--state, #ff7a18) 42%, transparent)',
+        background:
+          'linear-gradient(180deg, color-mix(in srgb, var(--state, #ff7a18) 9%, rgba(14,9,6,.72)), rgba(10,7,5,.82))',
+        boxShadow: '0 0 34px color-mix(in srgb, var(--state, #ff7a18) 18%, transparent)',
       }}
     >
-      <span
-        className="text-[11px] font-semibold uppercase tracking-wide"
-        style={{ color: 'var(--state, #ff7a18)' }}
-      >
-        Confirm · {ACTION_LABEL[proposal.action]}
-      </span>
-
-      <p className="mt-1 text-pretty text-[15px] leading-snug text-white/90">
-        {proposal.summary}
-      </p>
-
-      <dl className="mt-3 flex flex-col gap-1.5">
-        {detailRows(proposal).map((row) => (
-          <div key={row.label} className="flex items-baseline justify-between gap-3 text-[13px]">
-            <dt className="shrink-0 text-white/40">{row.label}</dt>
-            <dd className="break-all text-right font-mono text-white/80">{row.value}</dd>
+      {/* header — glyph + eyebrow + action title */}
+      <div className="flex items-center gap-3">
+        <div
+          className="grid flex-none place-items-center rounded-xl"
+          style={{
+            width: 38,
+            height: 38,
+            color: 'var(--state, #ff7a18)',
+            background: 'color-mix(in srgb, var(--state, #ff7a18) 14%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--state, #ff7a18) 34%, transparent)',
+          }}
+        >
+          <ActionGlyph action={proposal.action} />
+        </div>
+        <div className="min-w-0">
+          <div
+            className="text-[10px] font-semibold uppercase tracking-[1.4px]"
+            style={{ color: 'var(--state, #ff7a18)' }}
+          >
+            Confirm to act
           </div>
-        ))}
-      </dl>
+          <div className="truncate text-[16px] font-semibold leading-tight text-white/95">
+            {ACTION_LABEL[proposal.action]}
+          </div>
+        </div>
+      </div>
 
+      {/* the move — from → to */}
+      <div className="mt-3.5 flex items-center gap-1.5">
+        <FlowChip endpoint={flow.from} align="left" />
+        <svg
+          viewBox="0 0 24 24"
+          width="22"
+          height="22"
+          fill="none"
+          stroke="var(--state, #ff7a18)"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="flex-none"
+          style={{ filter: 'drop-shadow(0 0 5px color-mix(in srgb, var(--state, #ff7a18) 60%, transparent))' }}
+          aria-hidden
+        >
+          <path d="M4 12h15m0 0-5-5m5 5-5 5" />
+        </svg>
+        <FlowChip endpoint={flow.to} align="right" />
+      </div>
+
+      {flow.note ? (
+        <p className="mt-2.5 text-pretty text-center text-[12px] leading-snug text-white/45">
+          {flow.note}
+        </p>
+      ) : null}
+
+      {/* the gate */}
       <div className="mt-4 flex gap-2">
         <button
           type="button"
           disabled={busy}
           onClick={() => onConfirm(proposal.executionId)}
           className="flex-1 rounded-full px-4 py-2.5 text-sm font-semibold text-black transition active:scale-[0.98] disabled:opacity-40"
-          style={{ background: 'var(--state, #ff7a18)' }}
+          style={{
+            background: 'var(--state, #ff7a18)',
+            boxShadow: '0 0 22px color-mix(in srgb, var(--state, #ff7a18) 35%, transparent)',
+          }}
         >
           Confirm
         </button>
