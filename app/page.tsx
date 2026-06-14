@@ -7,6 +7,7 @@ import { StatusPill } from '@/components/StatusPill';
 import { MicButton } from '@/components/MicButton';
 import { QuickActions } from '@/components/QuickActions';
 import { ConfirmCard } from '@/components/ConfirmCard';
+import { Onboarding } from '@/components/Onboarding';
 import { STATE_META } from '@/lib/stateMeta';
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 
@@ -14,6 +15,7 @@ import { useFlameDaemon } from './lib/useFlameDaemon';
 import { useTts } from './lib/useTts';
 import { useMic } from './lib/useMic';
 import { useSpeakOnNewLine } from './lib/useSpeakOnNewLine';
+import { useOnboarding } from './lib/useOnboarding';
 import { explorerTx } from './lib/chain';
 
 
@@ -29,9 +31,17 @@ export default function Home() {
   const shellRef = useRef<HTMLDivElement>(null);
   const signedIn = !!user;
 
-  // The real mic drives the `listening` overlay on an otherwise-idle flame.
+  // First-run gate: does this user have a fully provisioned dæmon yet?
+  const onb = useOnboarding(signedIn);
+
+  // The flame leads the onboarding: it "thinks" while the dæmon is being minted,
+  // and the real mic drives the `listening` overlay on an otherwise-idle flame.
   const flameState =
-    mic.recording && d.state === 'idle' ? 'listening' : d.state;
+    onb.status === 'summoning'
+      ? 'thinking'
+      : mic.recording && d.state === 'idle'
+        ? 'listening'
+        : d.state;
 
   // Publish the live state color to CSS. Every glow reads var(--state); because
   // --state is a registered @property <color>, the whole room cross-fades.
@@ -78,7 +88,7 @@ export default function Home() {
       <section className="flex flex-1 flex-col items-center justify-center gap-6">
         <Flame state={flameState} getAmplitude={tts.getAmplitude} />
         <div className="flex flex-col items-center gap-3">
-          <IdentityBadge />
+          <IdentityBadge ensName={onb.ensName} />
           <StatusPill state={flameState} label={d.label} />
         </div>
       </section>
@@ -108,9 +118,12 @@ export default function Home() {
         ) : null}
       </div>
 
-      {/* lower third — mic + quick actions once signed in, else the summon gate */}
-      <section className="flex flex-col items-center gap-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
-        {signedIn ? (
+      {/* lower third — summon gate (logged out) → onboarding (no dæmon yet) →
+          mic + quick actions (provisioned) */}
+      <section className="flex w-full flex-col items-center gap-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
+        {!signedIn ? (
+          <SummonGate onSummon={handleSummon} />
+        ) : onb.status === 'ready' ? (
           <>
             <MicButton
               open={mic.recording}
@@ -120,7 +133,17 @@ export default function Home() {
             <QuickActions busy={d.busy} onPick={handlePick} />
           </>
         ) : (
-          <SummonGate onSummon={handleSummon} />
+          <Onboarding
+            status={onb.status}
+            error={onb.error}
+            reservedHandle={onb.reservedHandle}
+            activeHandle={onb.activeHandle}
+            onClaim={(h) => {
+              tts.unlock();
+              onb.claim(h);
+            }}
+            onRetry={onb.retry}
+          />
         )}
       </section>
     </main>
