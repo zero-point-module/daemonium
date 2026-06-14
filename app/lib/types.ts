@@ -22,7 +22,7 @@ export type DaemonState =
  * State-changing actions, each gated by a human confirmation. (Identity claiming is no longer
  * here — it's auto-provisioned at handle pick, see app/lib/provision.ts.)
  */
-export type DaemonAction = "send_usdc" | "spawn_subagent";
+export type DaemonAction = "send_usdc" | "send_eth" | "swap" | "spawn_subagent";
 
 /** Per-action detail payloads shown on the confirm card (human-readable). */
 export interface SendUsdcDetails {
@@ -31,6 +31,21 @@ export interface SendUsdcDetails {
   amount: string;
   /** Optional resolved ENS name for `to`. */
   toEns?: string;
+}
+export interface SendEthDetails {
+  to: string;
+  /** ETH amount as a string, e.g. "0.01". */
+  amount: string;
+  /** Optional resolved ENS name for `to`. */
+  toEns?: string;
+}
+export interface SwapDetails {
+  /** Token symbol the agent swaps FROM (e.g. "WETH"), on the swap chain. */
+  fromSymbol: string;
+  /** Token symbol the agent swaps TO (e.g. "ETH"). */
+  toSymbol: string;
+  /** Human amount of the from-token, e.g. "0.001". */
+  amount: string;
 }
 export interface SpawnSubagentDetails {
   /** Proposed sub-agent local label, e.g. "research". */
@@ -44,6 +59,8 @@ export interface SpawnSubagentDetails {
 
 export type ProposalDetails =
   | ({ action: "send_usdc" } & SendUsdcDetails)
+  | ({ action: "send_eth" } & SendEthDetails)
+  | ({ action: "swap" } & SwapDetails)
   | ({ action: "spawn_subagent" } & SpawnSubagentDetails);
 
 /** A pending action awaiting human confirmation. */

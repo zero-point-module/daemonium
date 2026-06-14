@@ -9,6 +9,8 @@ import type { ProposalCard } from '@/app/lib/types';
 
 const ACTION_LABEL: Record<ProposalCard['action'], string> = {
   send_usdc: 'Send USDC',
+  send_eth: 'Send ETH',
+  swap: 'Swap',
   spawn_subagent: 'Spawn sub-agent',
 };
 
@@ -19,6 +21,17 @@ function detailRows(proposal: ProposalCard): { label: string; value: string }[] 
       return [
         { label: 'Amount', value: `${d.amount} USDC` },
         { label: 'To', value: d.toEns ?? d.to },
+      ];
+    case 'send_eth':
+      return [
+        { label: 'Amount', value: `${d.amount} ETH` },
+        { label: 'To', value: d.toEns ?? d.to },
+      ];
+    case 'swap':
+      return [
+        { label: 'Swap', value: `${d.amount} ${d.fromSymbol}` },
+        { label: 'For', value: d.toSymbol },
+        { label: 'Chain', value: 'Base Sepolia' },
       ];
     case 'spawn_subagent':
       return [

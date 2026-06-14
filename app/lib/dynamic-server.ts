@@ -10,7 +10,7 @@
 import "server-only";
 import { DynamicEvmWalletClient } from "@dynamic-labs-wallet/node-evm";
 import { ThresholdSignatureScheme } from "@dynamic-labs-wallet/node";
-import type { WalletClient } from "viem";
+import type { WalletClient, Chain } from "viem";
 import { CHAIN, CHAIN_ID, SEPOLIA_RPC_URL } from "./chain";
 import { getWallet, putWallet, type StoredWallet } from "./wallet-store";
 import { withLock } from "./lock";
@@ -88,9 +88,14 @@ export function ensureAgentWallet(
 /**
  * A viem WalletClient backed by the agent's MPC key shares. Every call reloads the shares
  * from the store (the SDK is stateless). writeContract/sendTransaction on this client sign
- * via MPC AND broadcast on Sepolia. `key` is the agent's ENS name.
+ * via MPC AND broadcast. Defaults to Ethereum Sepolia; pass `opts` to target another chain
+ * (e.g. Base Sepolia for swaps — the same MPC address works on any EVM chain). `key` is the
+ * agent's ENS name.
  */
-export async function getSigner(key: string): Promise<WalletClient> {
+export async function getSigner(
+  key: string,
+  opts: { chain?: Chain; chainId?: number; rpcUrl?: string } = {},
+): Promise<WalletClient> {
   const wallet = await getWallet(key);
   if (!wallet) throw new Error(`No wallet for agent "${key}"`);
   const client = await getServerClient();
@@ -98,8 +103,8 @@ export async function getSigner(key: string): Promise<WalletClient> {
     walletMetadata: wallet.walletMetadata,
     externalServerKeyShares: wallet.externalServerKeyShares,
     password: requireEnv("DAEMON_WALLET_PASSWORD"),
-    chain: CHAIN,
-    chainId: CHAIN_ID,
-    rpcUrl: SEPOLIA_RPC_URL,
+    chain: opts.chain ?? CHAIN,
+    chainId: opts.chainId ?? CHAIN_ID,
+    rpcUrl: opts.rpcUrl ?? SEPOLIA_RPC_URL,
   });
 }
