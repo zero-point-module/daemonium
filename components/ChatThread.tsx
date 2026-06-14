@@ -10,14 +10,21 @@ import type { ChatMessage } from '@/app/lib/useFlameDaemon';
 
 export function ChatThread({ messages }: { messages: ChatMessage[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prevLen = useRef(0);
 
-  // Stick to the bottom when a new line arrives (keyed to the count, not the array
-  // identity — `messages` is rebuilt each render, and we don't want to yank a user
-  // who has scrolled up to read history).
+  // Keep the newest line in view: always snap on a NEW message; while Ignis's reply streams
+  // into the same bubble (length unchanged, text growing), follow it only if the user is
+  // already near the bottom — so someone who scrolled up to read history isn't yanked back.
+  const last = messages[messages.length - 1];
+  const lastText = last ? last.text : '';
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+    if (!el) return;
+    const isNew = messages.length > prevLen.current;
+    prevLen.current = messages.length;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (isNew || nearBottom) el.scrollTop = el.scrollHeight;
+  }, [messages.length, lastText]);
 
   return (
     <div

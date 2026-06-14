@@ -11,7 +11,7 @@
  * morph state (inputMode) and the draft are React state. Pointer events unify
  * mouse/touch so a tap doesn't double-fire.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 
 const HOLD_MS = 320;
 
@@ -48,18 +48,37 @@ export function LiquidSigil({
     setDraft('');
   }, []);
 
-  const holdStart = useCallback(() => {
-    if (inputMode) return; // while typing, a tap just exits — no hold-to-re-enter
-    if (holdTimer.current) clearTimeout(holdTimer.current);
-    holdTimer.current = setTimeout(() => {
-      suppressClick.current = true; // the click that fires on release must not also speak
-      enterInput();
-    }, HOLD_MS);
-  }, [inputMode, enterInput]);
+  const holdStart = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (inputMode) return; // while typing, a tap just exits — no hold-to-re-enter
+      suppressClick.current = false; // a fresh press must never carry a stale suppress flag
+      // Keep pointer + the trailing click on the orb even as it slides during the morph,
+      // so suppressClick is reliably consumed and the control can't get stuck.
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // setPointerCapture can throw on a stale pointerId — safe to ignore.
+      }
+      if (holdTimer.current) clearTimeout(holdTimer.current);
+      holdTimer.current = setTimeout(() => {
+        suppressClick.current = true; // the click that fires on release must not also speak
+        enterInput();
+      }, HOLD_MS);
+    },
+    [inputMode, enterInput],
+  );
 
   const holdEnd = useCallback(() => {
     if (holdTimer.current) clearTimeout(holdTimer.current);
   }, []);
+
+  // Don't leak a pending hold timer if we unmount mid-press (e.g. the ready gate flips).
+  useEffect(
+    () => () => {
+      if (holdTimer.current) clearTimeout(holdTimer.current);
+    },
+    [],
+  );
 
   const orbClick = useCallback(() => {
     if (suppressClick.current) {
@@ -114,6 +133,7 @@ export function LiquidSigil({
           onPointerDown={holdStart}
           onPointerUp={holdEnd}
           onPointerLeave={holdEnd}
+          onPointerCancel={holdEnd}
           onClick={orbClick}
           className="relative flex-none cursor-pointer"
           style={{
@@ -138,6 +158,10 @@ export function LiquidSigil({
             }
           }}
           placeholder="Tell Ignis what you need…"
+          enterKeyHint="send"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
           tabIndex={inputMode ? 0 : -1}
           aria-hidden={!inputMode}
           className="min-w-0 border-none bg-transparent px-2.5 text-[16px] text-[#f6ecdd] outline-none placeholder:text-[rgba(246,236,221,0.4)]"
