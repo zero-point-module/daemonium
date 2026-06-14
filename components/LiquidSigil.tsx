@@ -140,8 +140,11 @@ export function LiquidSigil({
             width: inputMode ? 44 : 78,
             height: inputMode ? 44 : 78,
             opacity: busy && !inputMode && !listening ? 0.6 : 1,
+            // The molten blob's mass reads slightly left of center; nudge the orb 7px right in
+            // voice mode (not the input pill) so it looks centered on the x-axis.
+            transform: inputMode ? 'translateX(0)' : 'translateX(7px)',
             transition:
-              'width 520ms cubic-bezier(.4,0,.2,1), height 520ms cubic-bezier(.4,0,.2,1), opacity 300ms ease',
+              'width 520ms cubic-bezier(.4,0,.2,1), height 520ms cubic-bezier(.4,0,.2,1), opacity 300ms ease, transform 420ms ease',
           }}
         >
           <SigilOrb active={listening} />
