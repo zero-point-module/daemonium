@@ -40,6 +40,10 @@ uniform float u_motion;         // 1 full motion, 0 frozen (reduced motion)
 uniform float u_opacity;        // per-layer master opacity
 uniform float u_whitehot;       // white-hot core amount
 uniform vec2  u_offset;         // parallax offset for this layer
+uniform float u_hueShift;       // 0..1: rotate this layer's hue toward u_color (core only)
+uniform float u_lumPreserve;    // 0..1: restore original brightness after the hue rotation
+uniform float u_faceProtect;    // 0..1: spare a soft face ellipse from the hue rotation
+uniform float u_faceY;          // vertical center of that face ellipse, in uv space
 
 // --- Ashima 2D simplex noise (MIT) ---
 vec3 mod289(vec3 x){ return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -80,6 +84,26 @@ float hash21(vec2 p){
 }
 
 float luma(vec3 c){ return max(c.r, max(c.g, c.b)); }
+
+// hue rotation (Sam Hocevar's branchless rgb<->hsv)
+vec3 rgb2hsv(vec3 c){
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
+}
+vec3 hsv2rgb(vec3 c){
+  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+// shortest-path interpolation around the hue circle
+float mixHue(float a, float b, float t){
+  float d = b - a;
+  d -= floor(d + 0.5);
+  return fract(a + d * t);
+}
 
 // sparse rising sparks
 float embers(vec2 uv, float t){
@@ -129,6 +153,29 @@ void main(){
   vec3 fire = u_color * L;
   fire = mix(fire, vec3(1.0), smoothstep(0.92, 1.0, L) * u_whitehot);
   vec3 col = mix(art, fire, u_tint);
+
+  // core hue adapt: spin the core's hue toward the state color so its fire
+  // matches the recolored tips/glow. two optional aids keep the face readable:
+  // faceProtect spares a soft ellipse over the face; lumPreserve restores each
+  // pixel's original brightness so warm painted features don't flatten out.
+  if (u_hueShift > 0.001) {
+    float protect = 0.0;
+    if (u_faceProtect > 0.001) {
+      vec2 fd = (uv - vec2(0.5, u_faceY)) / vec2(0.20, 0.13);
+      protect = (1.0 - smoothstep(0.6, 1.0, length(fd))) * u_faceProtect;
+    }
+    float amt = u_hueShift * (1.0 - protect);
+    if (amt > 0.001) {
+      float origL = dot(col, vec3(0.299, 0.587, 0.114));
+      vec3 hsv = rgb2hsv(col);
+      hsv.x = mixHue(hsv.x, rgb2hsv(u_color).x, amt);
+      vec3 sh = hsv2rgb(hsv);
+      float newL = dot(sh, vec3(0.299, 0.587, 0.114));
+      sh *= mix(1.0, origL / max(newL, 1e-3), u_lumPreserve);
+      col = sh;
+    }
+  }
+
   col *= u_brightness;
   col /= max(1.0, max(col.r, max(col.g, col.b)));  // cap, preserve hue
 

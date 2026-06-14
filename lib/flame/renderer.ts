@@ -7,10 +7,12 @@ export interface FlameLayers {
   core: string;
   tips: string;
   glow: string;
-  /** Eyes-closed blink frame for the core (calm + concerned moods). */
+  /** Eyes-closed blink frame for the core. */
   coreBlink?: string;
-  /** Mouth-open talk frame; the live voice amplitude blends core→coreTalk. */
+  /** Mouth-open talk frame; louder voice blends core→coreTalk. */
   coreTalk?: string;
+  /** Wider mouth; the loudest part of the voice blends coreTalk→coreTalkWide. */
+  coreTalkWide?: string;
 }
 
 /** What the component pushes when the state (or a debug slider) changes. */
@@ -31,6 +33,8 @@ export interface FlameRenderer {
   setPointer(x: number, y: number): void;
   /** Live voice amplitude 0..1; pushed per frame to make the flame pulse as Ignis speaks. */
   setVoice(level: number): void;
+  /** Tune the core's hue-adapt fx (hue/lumPreserve/faceProtect/faceY, all 0..1). */
+  setCoreFx(o: { hue?: number; lumPreserve?: number; faceProtect?: number; faceY?: number }): void;
   resize(cssW: number, cssH: number, dpr: number): void;
   frame(nowMs: number): void;
   dispose(): void;
@@ -161,6 +165,10 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
     opacity: gl.getUniformLocation(prog, 'u_opacity'),
     whitehot: gl.getUniformLocation(prog, 'u_whitehot'),
     offset: gl.getUniformLocation(prog, 'u_offset'),
+    hueShift: gl.getUniformLocation(prog, 'u_hueShift'),
+    lumPreserve: gl.getUniformLocation(prog, 'u_lumPreserve'),
+    faceProtect: gl.getUniformLocation(prog, 'u_faceProtect'),
+    faceY: gl.getUniformLocation(prog, 'u_faceY'),
   };
 
   const placeholder = makeTexture(gl);
@@ -186,6 +194,7 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
     load(l.tips);
     if (l.coreBlink) load(l.coreBlink);
     if (l.coreTalk) load(l.coreTalk);
+    if (l.coreTalkWide) load(l.coreTalkWide);
   }
 
   const cur: Live = {
@@ -198,6 +207,7 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
     core: `/daemon/${e}/core.webp`,
     coreBlink: `/daemon/${e}/core-blink.webp`,
     coreTalk: `/daemon/${e}/core-talk.webp`,
+    coreTalkWide: `/daemon/${e}/core-talk-wide.webp`,
     tips: `/daemon/${e}/tips.webp`,
     glow: `/daemon/${e}/glow.webp`,
   });
@@ -215,6 +225,10 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
   let offY = 0;
   let voice = 0;       // smoothed voice amplitude actually applied
   let voiceTarget = 0; // latest amplitude pushed from the TTS analyser
+  let coreHue = 0;         // 0..1 hue rotation of the core toward the state color
+  let coreLumPreserve = 0; // 0..1 restore brightness after the rotation
+  let coreFaceProtect = 0; // 0..1 spare a face ellipse from the rotation
+  let coreFaceY = 0.40;    // vertical center of that face ellipse (uv space)
   let blinkActive = false; // a blink is currently playing
   let blinkT = 0;          // seconds into the current blink
   let nextBlink = 3;       // seconds until the next blink
@@ -246,6 +260,13 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
   function setMotion(full: boolean) { motion = full ? 1 : 0; }
   function setPointer(x: number, y: number) { pointerX = x; pointerY = y; }
   function setVoice(level: number) { voiceTarget = level < 0 ? 0 : level > 1 ? 1 : level; }
+  function setCoreFx(o: { hue?: number; lumPreserve?: number; faceProtect?: number; faceY?: number }) {
+    const c = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+    if (o.hue !== undefined) coreHue = c(o.hue);
+    if (o.lumPreserve !== undefined) coreLumPreserve = c(o.lumPreserve);
+    if (o.faceProtect !== undefined) coreFaceProtect = c(o.faceProtect);
+    if (o.faceY !== undefined) coreFaceY = c(o.faceY);
+  }
 
   function resize(cssW: number, cssH: number, dpr: number) {
     const w = Math.max(1, Math.round(cssW * dpr));
@@ -326,12 +347,18 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
 
     const blinkSrc = curL.coreBlink;
     const talkSrc = curL.coreTalk;
+    const talkWideSrc = curL.coreTalkWide;
     for (let i = 0; i < PASSES.length; i++) {
       const p = PASSES[i];
       gl.blendFunc(gl.ONE, p.additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
 
       gl.uniform1f(U.distort, cur.distort * p.distortMul * (1 + voice * 0.7));
       gl.uniform1f(U.tint, p.tint);
+      const isCore = p.name === 'core';
+      gl.uniform1f(U.hueShift, isCore ? coreHue : 0);
+      gl.uniform1f(U.lumPreserve, isCore ? coreLumPreserve : 0);
+      gl.uniform1f(U.faceProtect, isCore ? coreFaceProtect : 0);
+      gl.uniform1f(U.faceY, coreFaceY);
       gl.uniform1f(U.whitehot, p.whitehot);
       gl.uniform1f(U.ember, p.ember ? cur.ember + voice * 0.6 : 0);
       gl.uniform1f(U.opacity, p.name === 'glow' ? Math.min(1, glowOpacity + voice * 0.45) : 1);
@@ -339,7 +366,7 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
 
       // Per-pass crossfade: glow/tips only swap expressions; the core also
       // blinks and lip-syncs, so it picks its own second frame + mix.
-      const srcA = curL[p.name];
+      let srcA = curL[p.name];
       let srcB = crossfading ? nextL[p.name] : curL[p.name];
       let passMix = crossfading ? mix : 0;
       if (p.name === 'core' && !crossfading) {
@@ -347,8 +374,16 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
           srcB = blinkSrc;
           passMix = blinkMix;
         } else if (talkSrc) {
-          srcB = talkSrc;
-          passMix = mouthMix;
+          // Mouth opens with the voice: rest → talk, then talk → talk-wide for
+          // the loudest half. The wide frame is optional (older art lacks it).
+          if (talkWideSrc && mouthMix > 0.5) {
+            srcA = talkSrc;
+            srcB = talkWideSrc;
+            passMix = (mouthMix - 0.5) * 2;
+          } else {
+            srcB = talkSrc;
+            passMix = talkWideSrc ? mouthMix * 2 : mouthMix;
+          }
         }
       }
       gl.uniform1f(U.texMix, passMix);
@@ -373,5 +408,5 @@ export function createFlameRenderer(canvas: HTMLCanvasElement): FlameRenderer | 
     gl.deleteProgram(prog);
   }
 
-  return { setTargets, setMotion, setPointer, setVoice, resize, frame, dispose };
+  return { setTargets, setMotion, setPointer, setVoice, setCoreFx, resize, frame, dispose };
 }

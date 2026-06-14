@@ -55,6 +55,12 @@ export function Flame({
   dbgVoiceRef.current = dbgVoice;
   const dbgTalkRef = useRef(dbgTalk);
   dbgTalkRef.current = dbgTalk;
+  // Core hue-adapt tuning (all 0..1): how far the core rotates toward the state
+  // color, brightness restore, face-ellipse protect amount, and its vertical center.
+  const [coreHue, setCoreHue] = useState(0);
+  const [coreLum, setCoreLum] = useState(0);
+  const [coreProtect, setCoreProtect] = useState(0);
+  const [coreFaceY, setCoreFaceY] = useState(0.4);
 
   const effective = override ?? state;
 
@@ -167,6 +173,16 @@ export function Flame({
     });
   }, [effective, tweak]);
 
+  // Push the core hue-adapt tuning to the renderer whenever any of it changes.
+  useEffect(() => {
+    rendererRef.current?.setCoreFx({
+      hue: coreHue,
+      lumPreserve: coreLum,
+      faceProtect: coreProtect,
+      faceY: coreFaceY,
+    });
+  }, [coreHue, coreLum, coreProtect, coreFaceY]);
+
   return (
     <div
       ref={wrapRef}
@@ -204,8 +220,16 @@ export function Flame({
           base={STATE_PARAMS[effective]}
           dbgVoice={dbgVoice}
           dbgTalk={dbgTalk}
+          coreHue={coreHue}
+          coreLum={coreLum}
+          coreProtect={coreProtect}
+          coreFaceY={coreFaceY}
           onVoice={setDbgVoice}
           onTalk={setDbgTalk}
+          onCoreHue={setCoreHue}
+          onCoreLum={setCoreLum}
+          onCoreProtect={setCoreProtect}
+          onCoreFaceY={setCoreFaceY}
           onPickState={setOverride}
           onTweak={(key, value) => setTweak((prev) => ({ ...prev, [key]: value }))}
           onReset={() => {
@@ -213,6 +237,10 @@ export function Flame({
             setTweak({});
             setDbgVoice(null);
             setDbgTalk(false);
+            setCoreHue(0);
+            setCoreLum(0);
+            setCoreProtect(0);
+            setCoreFaceY(0.4);
           }}
         />
       )}
@@ -242,8 +270,16 @@ function FlameDebug({
   base,
   dbgVoice,
   dbgTalk,
+  coreHue,
+  coreLum,
+  coreProtect,
+  coreFaceY,
   onVoice,
   onTalk,
+  onCoreHue,
+  onCoreLum,
+  onCoreProtect,
+  onCoreFaceY,
   onPickState,
   onTweak,
   onReset,
@@ -253,8 +289,16 @@ function FlameDebug({
   base: FlameParams;
   dbgVoice: number | null;
   dbgTalk: boolean;
+  coreHue: number;
+  coreLum: number;
+  coreProtect: number;
+  coreFaceY: number;
   onVoice: (v: number | null) => void;
   onTalk: (on: boolean) => void;
+  onCoreHue: (v: number) => void;
+  onCoreLum: (v: number) => void;
+  onCoreProtect: (v: number) => void;
+  onCoreFaceY: (v: number) => void;
   onPickState: (s: DaemonState | null) => void;
   onTweak: (key: keyof FlameParams, value: number) => void;
   onReset: () => void;
@@ -322,6 +366,33 @@ function FlameDebug({
             live
           </button>
         </div>
+      </div>
+
+      {/* core → fire color: hue rotation toward the state color + readability aids */}
+      <div className="mb-2 space-y-1.5 rounded bg-white/[0.04] p-2">
+        <div className="font-medium text-white/70">core → fire color</div>
+        {([
+          ['hue', coreHue, onCoreHue],
+          ['lum-preserve', coreLum, onCoreLum],
+          ['face-protect', coreProtect, onCoreProtect],
+          ['face Y', coreFaceY, onCoreFaceY],
+        ] as [string, number, (v: number) => void][]).map(([label, value, set]) => (
+          <label key={label} className="block">
+            <span className="flex justify-between">
+              <span>{label}</span>
+              <span className="tabular-nums text-white/50">{value.toFixed(2)}</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.02}
+              value={value}
+              onChange={(e) => set(parseFloat(e.target.value))}
+              className="w-full accent-orange-400/80"
+            />
+          </label>
+        ))}
       </div>
 
       <div className="space-y-1.5">
