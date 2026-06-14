@@ -2,15 +2,16 @@
  * The "minter" — a single backend-controlled wallet that mints every user's root subname
  * under the parent (`daemonium.eth`). This is what automates ENS provisioning: the parent's
  * owner approves the minter ONCE (NameWrapper.setApprovalForAll(minter, true)), and from then
- * on the minter can create `ignis-<id>.daemonium.eth` for any user — no per-user approval.
+ * on the minter can create `<handle>.daemonium.eth` for any user — no per-user approval.
  *
- * The minter sets each subname's owner to that user's Ignis, so each user still OWNS its own
- * name and subtree (and can mint sub-agents itself). The minter only bootstraps the root.
+ * The minter sets each subname's owner to that user's dæmon, so each user still OWNS its own
+ * name and subtree (and can mint sub-agents itself). The minter only bootstraps that one level.
  */
 import "server-only";
 import { parseEther, type Address } from "viem";
-import { ensureAgentWallet, getSigner } from "./dynamic-server";
-import { publicClient } from "./evm";
+import type { WalletMetadata } from "@dynamic-labs-wallet/node";
+import { ensureAgentWallet, getSigner, seedWalletMetadata } from "./dynamic-server";
+import { identityClient } from "./evm";
 import { IGNIS_GAS_SEED, GAS_SEED_THRESHOLD } from "./chain";
 import { getWallet, putWallet, type StoredWallet } from "./wallet-store";
 
@@ -22,8 +23,8 @@ export const MINTER_KEY = "minter";
  * shares are what sign. Set MINTER_WALLET to a (base64 of, or raw) minter wallet record and
  * EVERY environment — each local worktree and the deploy — loads that SAME funded + approved
  * minter, instead of each .daemon store auto-minting its own throwaway. Unset → legacy
- * behaviour. Capture the value with `npm run minter:export`. The shares are decrypted with
- * DAEMON_WALLET_PASSWORD, so keep that consistent across environments.
+ * behaviour. Capture the value with `npm run minter:export`. Shares live in Dynamic's backup
+ * (backUpToDynamic), recovered via DAEMON_WALLET_PASSWORD — keep that consistent across environments.
  */
 function loadPinnedMinter(): StoredWallet | null {
   const raw = process.env.MINTER_WALLET?.trim();
@@ -35,18 +36,18 @@ function loadPinnedMinter(): StoredWallet | null {
   } catch {
     throw new Error("MINTER_WALLET is set but is not valid JSON nor base64-encoded JSON.");
   }
-  const w = parsed as Partial<StoredWallet>;
-  if (!w.address || !w.walletMetadata || !w.externalServerKeyShares) {
-    throw new Error(
-      "MINTER_WALLET is missing required fields (address, walletMetadata, externalServerKeyShares).",
-    );
+  const w = parsed as Partial<StoredWallet> & { walletMetadata?: WalletMetadata };
+  if (!w.address) {
+    throw new Error("MINTER_WALLET is missing the required field: address.");
   }
-  const record = w as StoredWallet;
+  // If a legacy pin carries walletMetadata, seed the cache so the minter signs immediately;
+  // otherwise its signable metadata is reconstructed from Dynamic's getEvmWallets() on demand.
+  if (w.walletMetadata) seedWalletMetadata(w.address, w.walletMetadata);
   return {
-    ...record,
     label: MINTER_KEY, // always canonical, whatever the export was keyed as
-    createdAt: record.createdAt ?? new Date().toISOString(),
-    children: record.children ?? [],
+    address: w.address,
+    createdAt: w.createdAt ?? new Date().toISOString(),
+    children: w.children ?? [],
   };
 }
 
@@ -68,7 +69,7 @@ export async function ensureMinter(): Promise<StoredWallet> {
  * the target already has enough. Returns the funding tx hash, or null if nothing was needed.
  */
 export async function seedGasIfLow(target: Address): Promise<`0x${string}` | null> {
-  const balance = await publicClient.getBalance({ address: target });
+  const balance = await identityClient.getBalance({ address: target });
   if (balance >= parseEther(GAS_SEED_THRESHOLD)) return null;
   await ensureMinter();
   const minter = await getSigner(MINTER_KEY);
@@ -78,6 +79,6 @@ export async function seedGasIfLow(target: Address): Promise<`0x${string}` | nul
     account: minter.account!,
     chain: minter.chain,
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  await identityClient.waitForTransactionReceipt({ hash });
   return hash;
 }

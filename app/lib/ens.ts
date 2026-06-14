@@ -1,8 +1,9 @@
 /**
- * ENS subname registration on Sepolia via the NameWrapper, plus text records on the
- * PublicResolver. This is how an agent gets its NAME and how the cluster nests:
- * Ignis claims `ignis.daemonium.eth` (parent owner = the human, who approves Ignis as an
- * operator), then Ignis itself mints `research.ignis.daemonium.eth` under its own node.
+ * ENS subname registration on Ethereum L1 via the NameWrapper, plus text records on the
+ * PublicResolver. L1 still runs v1 with a LIVE NameWrapper, so this mints for real. This is how
+ * an agent gets its NAME and how the cluster nests: the minter mints `<handle>.daemonium.eth`
+ * (owned by that user's dæmon), then the dæmon itself mints `research.<handle>.daemonium.eth`
+ * under its own node.
  *
  * Authorization (verified from NameWrapper.sol): the caller of setSubnodeRecord must be the
  * NameWrapper token owner of the parent node, OR an approved operator (setApprovalForAll).
@@ -11,7 +12,7 @@ import "server-only";
 import { parseAbi, namehash, type Address, type Hash } from "viem";
 import { normalize } from "viem/ens";
 import { ENS, AGENT_CARD_TEXT_KEY } from "./chain";
-import { publicClient } from "./evm";
+import { identityClient } from "./evm";
 import { getSigner } from "./dynamic-server";
 
 const nameWrapperAbi = parseAbi([
@@ -37,13 +38,50 @@ export function nodeOf(name: string): Hash {
  * rather than letting a flaky read masquerade as "doesn't exist" and trigger a re-mint.
  */
 export async function subnameExists(name: string): Promise<boolean> {
-  const owner = (await publicClient.readContract({
+  const owner = (await identityClient.readContract({
     address: ENS.nameWrapper,
     abi: nameWrapperAbi,
     functionName: "ownerOf",
     args: [BigInt(nodeOf(name))],
   })) as `0x${string}`;
   return owner !== "0x0000000000000000000000000000000000000000";
+}
+
+/** Strip the leftmost label: "research.ignis.daemonium.eth" → "ignis.daemonium.eth". */
+export function parentOf(name: string): string {
+  return name.split(".").slice(1).join(".");
+}
+
+const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+
+/**
+ * Read whether `operator` can mint subnames under `parentName`. Returns the wrapped owner, whether
+ * the parent is wrapped at all, and whether `operator` is the owner or an approved operator. The
+ * two on-chain prerequisites for the cluster, made inspectable (used by GET /api/daemon/ens-status).
+ */
+export async function parentControl(
+  parentName: string,
+  operator: Address,
+): Promise<{ owner: Address | null; wrapped: boolean; canManage: boolean }> {
+  const node = nodeOf(parentName);
+  const owner = (await identityClient.readContract({
+    address: ENS.nameWrapper,
+    abi: nameWrapperAbi,
+    functionName: "ownerOf",
+    args: [BigInt(node)],
+  })) as Address;
+  const wrapped = owner.toLowerCase() !== ZERO_ADDR;
+  if (!wrapped) return { owner: null, wrapped: false, canManage: false };
+  if (owner.toLowerCase() === operator.toLowerCase()) {
+    return { owner, wrapped: true, canManage: true };
+  }
+  const approved = (await identityClient.readContract({
+    address: ENS.nameWrapper,
+    abi: nameWrapperAbi,
+    functionName: "isApprovedForAll",
+    args: [owner, operator],
+  })) as boolean;
+  return { owner, wrapped: true, canManage: approved };
 }
 
 /**
@@ -54,20 +92,7 @@ export async function canManageParent(
   parentName: string,
   operator: Address,
 ): Promise<boolean> {
-  const node = nodeOf(parentName);
-  const owner = (await publicClient.readContract({
-    address: ENS.nameWrapper,
-    abi: nameWrapperAbi,
-    functionName: "ownerOf",
-    args: [BigInt(node)],
-  })) as Address;
-  if (owner.toLowerCase() === operator.toLowerCase()) return true;
-  return publicClient.readContract({
-    address: ENS.nameWrapper,
-    abi: nameWrapperAbi,
-    functionName: "isApprovedForAll",
-    args: [owner, operator],
-  });
+  return (await parentControl(parentName, operator)).canManage;
 }
 
 /**
@@ -94,7 +119,7 @@ export async function registerSubname(opts: {
     account,
     chain: signer.chain,
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  await identityClient.waitForTransactionReceipt({ hash });
 
   const name = `${label}.${parentName}`;
   return { node: nodeOf(name), name, hash };
@@ -116,6 +141,6 @@ export async function setAgentCardRecord(opts: {
     account: signer.account!,
     chain: signer.chain,
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  await identityClient.waitForTransactionReceipt({ hash });
   return hash;
 }

@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
     "@dynamic-labs-wallet/core",
     "@dynamic-labs-wallet/primitives",
     "@evervault/wasm-attestation-bindings",
+    "ioredis",
   ],
 };
 

@@ -1,16 +1,16 @@
 /**
- * ERC-8004 "Trustless Agents" Identity Registry on Sepolia. Registering mints an ERC-721
- * whose tokenURI is the agent card (served by /api/agent-card/[label]). We use the
- * single-arg register(string agentURI) overload and read the agentId back from the
- * Registered event in the receipt.
+ * ERC-8004 "Trustless Agents" Identity Registry on Ethereum mainnet (the identity layer).
+ * Registering mints an ERC-721 whose tokenURI is the agent card (served by /api/agent-card/[label]).
+ * We use the single-arg register(string agentURI) overload and read the agentId back from the
+ * Registered event in the receipt. The mainnet registry shares the same implementation/ABI as the
+ * testnet one — only the address differs (see chain.ts ERC8004).
  *
- * ABI fragments are hand-pinned from github.com/erc-8004/erc-8004-contracts (the Sepolia
- * source is not verified on Etherscan).
+ * ABI fragments are hand-pinned from github.com/erc-8004/erc-8004-contracts.
  */
 import "server-only";
 import { parseAbi, parseEventLogs, type Address, type Hash } from "viem";
 import { ERC8004 } from "./chain";
-import { publicClient } from "./evm";
+import { identityClient } from "./evm";
 import { getSigner } from "./dynamic-server";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -27,7 +27,7 @@ const identityRegistryAbi = parseAbi([
 
 /** Does `owner` already hold an ERC-8004 identity NFT? Guards against duplicate mints on retry. */
 export async function ownsIdentity(owner: Address): Promise<boolean> {
-  const balance = (await publicClient.readContract({
+  const balance = (await identityClient.readContract({
     address: ERC8004.identityRegistry,
     abi: identityRegistryAbi,
     functionName: "balanceOf",
@@ -50,7 +50,7 @@ export async function registerIdentity(opts: {
     account: signer.account!,
     chain: signer.chain,
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await identityClient.waitForTransactionReceipt({ hash });
 
   // Prefer the custom Registered event; fall back to the ERC-721 mint Transfer log so a
   // mismatched/renamed event can't make us throw (and then re-mint a duplicate on retry).

@@ -1,25 +1,24 @@
 /**
- * Persistence for agent wallets. The Dynamic server-wallet SDK is STATELESS — we own
- * `walletMetadata` + `externalServerKeyShares` and must reload both before every sign.
- * Lose the shares → the wallet (and its funds) is unrecoverable.
+ * The agent identity index. This holds only small, non-sensitive APPLICATION state — which
+ * address is which dæmon, and the cluster tree — keyed by the agent's ENS name. It does NOT hold
+ * wallet key material or even Dynamic's `walletMetadata`: Dynamic is the source of truth for
+ * wallets (shares live in its backup; signable metadata is reconstructed from `getEvmWallets()`
+ * at sign time — see dynamic-server.ts). The only thing Dynamic can't tell us is which wallet is
+ * which dæmon, so we keep this thin name→address index.
  *
- * Hackathon store: a gitignored JSON file under .daemon/. Production would use a vault/KMS
- * for the shares and a DB for the metadata. The file doubles as the agent identity tree.
+ * Backed by `kv.ts` — a serverless Redis (Upstash / Vercel KV) when configured, else a gitignored
+ * JSON file for local dev. No JSON file is required to deploy.
  */
 import "server-only";
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import type { WalletMetadata, ServerKeyShare } from "@dynamic-labs-wallet/node";
+import { kvGet, kvGetAll, kvSet, kvDel } from "./kv";
 import { withLock } from "./lock";
+
+const NS = "wallets";
 
 export interface StoredWallet {
   label: string;
   address: string;
-  /** Opaque, from createWalletAccount — do not depend on internal fields. */
-  walletMetadata: WalletMetadata;
-  externalServerKeyShares: ServerKeyShare[];
   createdAt: string;
-  // Identity — set during provisioning (ENS name, ERC-8004 id + agent-card URI).
   ensName?: string;
   agentId?: string;
   agentCardUri?: string;
@@ -27,75 +26,56 @@ export interface StoredWallet {
   children: string[];
 }
 
-type Store = Record<string, StoredWallet>; // keyed by label
-
-const STORE_DIR = path.join(process.cwd(), ".daemon");
-const STORE_PATH = path.join(STORE_DIR, "wallets.json");
-
-async function readStore(): Promise<Store> {
-  try {
-    const raw = await fs.readFile(STORE_PATH, "utf8");
-    return JSON.parse(raw) as Store;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
-    throw err;
-  }
+export function getWallet(label: string): Promise<StoredWallet | undefined> {
+  return kvGet<StoredWallet>(NS, label);
 }
 
-async function writeStore(store: Store): Promise<void> {
-  await fs.mkdir(STORE_DIR, { recursive: true });
-  await fs.writeFile(STORE_PATH, JSON.stringify(store, null, 2), "utf8");
+export async function getWalletByAddress(address: string): Promise<StoredWallet | undefined> {
+  const all = await kvGetAll<StoredWallet>(NS);
+  const lower = address.toLowerCase();
+  return Object.values(all).find((w) => w.address.toLowerCase() === lower);
 }
 
-export async function getWallet(label: string): Promise<StoredWallet | undefined> {
-  return (await readStore())[label];
+export async function listWallets(): Promise<StoredWallet[]> {
+  return Object.values(await kvGetAll<StoredWallet>(NS));
 }
 
 export function putWallet(w: StoredWallet): Promise<void> {
-  // Serialized so concurrent writes to different keys don't clobber the whole file.
-  return withLock("wallets", async () => {
-    const store = await readStore();
-    store[w.label] = w;
-    await writeStore(store);
-  });
+  // Per-field set is atomic (Redis HSET; the file backend locks the namespace internally).
+  return kvSet(NS, w.label, w);
 }
 
-export function updateWallet(
-  label: string,
-  patch: Partial<StoredWallet>,
-): Promise<StoredWallet> {
-  // Re-read INSIDE the lock so field merges (e.g. children append) can't lose updates.
-  return withLock("wallets", async () => {
-    const store = await readStore();
-    const existing = store[label];
+export function deleteWallet(label: string): Promise<void> {
+  return kvDel(NS, label);
+}
+
+export function updateWallet(label: string, patch: Partial<StoredWallet>): Promise<StoredWallet> {
+  // Read-modify-write under a per-label lock so concurrent merges (e.g. children append) can't
+  // lose updates. (Process-local; a multi-instance deploy would want an atomic field update.)
+  return withLock(`wallet:${label}`, async () => {
+    const existing = await kvGet<StoredWallet>(NS, label);
     if (!existing) throw new Error(`No wallet for label "${label}"`);
     const next = { ...existing, ...patch };
-    store[label] = next;
-    await writeStore(store);
+    await kvSet(NS, label, next);
     return next;
   });
 }
 
 /**
- * Append a child label to a parent's `children`, deduped, ATOMICALLY inside the store lock.
- * Unlike `updateWallet(parent, { children: [...] })` — where the array is computed from a
- * snapshot read before the lock — this reads the parent inside the lock, so two concurrent
- * spawns under the same parent can't clobber each other's child.
+ * Append a child label to a parent's `children`, deduped, ATOMICALLY inside the per-label lock:
+ * the parent is read INSIDE the lock and the child appended, so two concurrent spawns under the
+ * same parent can't clobber each other's child — unlike `updateWallet(parent, { children })`,
+ * whose array is computed from a snapshot taken before the lock.
  */
-export function appendChild(
-  parentLabel: string,
-  childLabel: string,
-): Promise<StoredWallet> {
-  return withLock("wallets", async () => {
-    const store = await readStore();
-    const existing = store[parentLabel];
+export function appendChild(parentLabel: string, childLabel: string): Promise<StoredWallet> {
+  return withLock(`wallet:${parentLabel}`, async () => {
+    const existing = await kvGet<StoredWallet>(NS, parentLabel);
     if (!existing) throw new Error(`No wallet for label "${parentLabel}"`);
     const children = existing.children.includes(childLabel)
       ? existing.children
       : [...existing.children, childLabel];
     const next = { ...existing, children };
-    store[parentLabel] = next;
-    await writeStore(store);
+    await kvSet(NS, parentLabel, next);
     return next;
   });
 }

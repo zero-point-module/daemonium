@@ -1,7 +1,11 @@
 /**
- * Shared read-only viem client for Sepolia. Server-side only.
- * Signing/broadcasting goes through the Dynamic server wallet (see dynamic-server.ts);
- * this client is for balance reads, log queries, and waiting on receipts.
+ * Shared read-only viem clients. Server-side only. Signing/broadcasting goes through the
+ * Dynamic server wallet (see dynamic-server.ts); these clients are for balance reads, log
+ * queries, and waiting on receipts.
+ *
+ * Two clients for the hybrid topology:
+ *   • identityClient → Ethereum mainnet (ENS resolution, ERC-8004 reads, identity receipts).
+ *   • defiClient     → Base mainnet (USDC/ETH balances, swap/LI.FI/send receipts, USDC logs).
  */
 import "server-only";
 import {
@@ -11,11 +15,24 @@ import {
   parseAbiItem,
   type Address,
 } from "viem";
-import { CHAIN, SEPOLIA_RPC_URL, USDC } from "./chain";
+import {
+  IDENTITY_CHAIN,
+  IDENTITY_RPC_URL,
+  DEFI_CHAIN,
+  DEFI_RPC_URL,
+  USDC,
+} from "./chain";
 
-export const publicClient = createPublicClient({
-  chain: CHAIN,
-  transport: http(SEPOLIA_RPC_URL),
+/** Ethereum mainnet — identity layer (ENS, ERC-8004, wallet identity). */
+export const identityClient = createPublicClient({
+  chain: IDENTITY_CHAIN,
+  transport: http(IDENTITY_RPC_URL),
+});
+
+/** Base mainnet — DeFi / value layer (USDC, swaps, LI.FI, sends). */
+export const defiClient = createPublicClient({
+  chain: DEFI_CHAIN,
+  transport: http(DEFI_RPC_URL),
 });
 
 const TRANSFER_EVENT = parseAbiItem(
@@ -30,18 +47,18 @@ export interface UsdcTransfer {
 }
 
 /**
- * Incoming USDC transfers to `address`. Defaults to scanning the last ~9k blocks; pass
- * `fromBlock` to poll only what's new. Returns the latest block so callers can advance their
- * cursor. Used by the get_activity tool and the proactive /watch endpoint.
+ * Incoming USDC transfers to `address` on Base mainnet (where value lives). Defaults to scanning
+ * the last ~9k blocks; pass `fromBlock` to poll only what's new. Returns the latest block so
+ * callers can advance their cursor. Used by the get_activity tool and the proactive /watch route.
  */
 export async function getIncomingUsdc(
   address: Address,
   fromBlock?: bigint,
 ): Promise<{ latestBlock: bigint; transfers: UsdcTransfer[] }> {
-  const latestBlock = await publicClient.getBlockNumber();
+  const latestBlock = await defiClient.getBlockNumber();
   const span = BigInt(9000);
   const start = fromBlock ?? (latestBlock > span ? latestBlock - span : BigInt(0));
-  const logs = await publicClient.getLogs({
+  const logs = await defiClient.getLogs({
     address: USDC.address,
     event: TRANSFER_EVENT,
     args: { to: address },

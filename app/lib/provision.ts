@@ -2,10 +2,10 @@
  * Auto-provision a user's dæmon identity from their chosen handle. Idempotent and safe to
  * retry — each step checks on-chain/store state before acting. This is the "auto-claim on
  * login" path: no human confirmation (claiming a name isn't a value transfer), all gas paid
- * by the minter.
+ * by the minter. Identity (wallet + ENS + ERC-8004) lives on Ethereum L1.
  *
- * Builds the 3-level cluster:
- *   daemonium.eth (owner) → <handle>.daemonium.eth (minter) → ignis.<handle>.daemonium.eth (dæmon)
+ * Builds the cluster:
+ *   daemonium.eth (minter) → <handle>.daemonium.eth (the dæmon) → <sub>.<handle>.daemonium.eth
  */
 import "server-only";
 import { type Address } from "viem";
@@ -15,7 +15,7 @@ import { ensureMinter, seedGasIfLow, MINTER_KEY } from "./minter";
 import { registerSubname, setAgentCardRecord, subnameExists, canManageParent } from "./ens";
 import { registerIdentity, ownsIdentity } from "./erc8004";
 import { getWallet, updateWallet } from "./wallet-store";
-import { ensNameForHandle, userRootName } from "./handles";
+import { ensNameForHandle } from "./handles";
 import { withLock } from "./lock";
 
 export interface ProvisionResult {
@@ -36,8 +36,7 @@ export async function provisionIdentity(handle: string): Promise<ProvisionResult
 }
 
 async function provisionInner(handle: string): Promise<ProvisionResult> {
-  const ensName = ensNameForHandle(handle); // ignis.<handle>.daemonium.eth
-  const userRoot = userRootName(handle); // <handle>.daemonium.eth
+  const ensName = ensNameForHandle(handle); // <handle>.daemonium.eth — the dæmon itself
   const uri = agentCardUri(ensName);
 
   // 1. The dæmon's own wallet — keyed by its ENS name.
@@ -58,10 +57,11 @@ async function provisionInner(handle: string): Promise<ProvisionResult> {
     if (agentId) await updateWallet(ensName, { agentId, agentCardUri: uri });
   }
 
-  // 4. ENS subname cluster. On Sepolia this is OFF (ENS_ONCHAIN_MINTING=false): v1 NameWrapper is
-  //    frozen and v2 subname-issuance contracts aren't published, so the ENS name is a label and
-  //    the real on-chain identity is the ERC-8004 NFT above. The v1 minting path is kept behind
-  //    the flag for a v1-live network. Best-effort + decoupled either way — never blocks the dæmon.
+  // 4. ENS subname cluster (Ethereum L1). The minter mints ONE level — `<handle>.daemonium.eth`,
+  //    owned directly by the dæmon — then the dæmon sets its own agent-card text record. ON by
+  //    default (L1 v1 NameWrapper is live); still best-effort + decoupled: if `daemonium.eth`
+  //    isn't wrapped/approved for the minter yet, canManageParent is false and we skip cleanly,
+  //    leaving the dæmon with its wallet + ERC-8004 identity (the real on-chain identity).
   let ensRegistered = false;
   if (ENS_ONCHAIN_MINTING) {
     try {
@@ -73,12 +73,7 @@ async function provisionInner(handle: string): Promise<ProvisionResult> {
       try {
         const minterAddr = (await ensureMinter()).address as Address;
         if (await canManageParent(ENS_PARENT_NAME, minterAddr)) {
-          if (!(await subnameExists(userRoot))) {
-            await registerSubname({ parentName: ENS_PARENT_NAME, label: handle, owner: minterAddr, signerLabel: MINTER_KEY });
-          }
-          if (!(await subnameExists(ensName))) {
-            await registerSubname({ parentName: userRoot, label: "ignis", owner, signerLabel: MINTER_KEY });
-          }
+          await registerSubname({ parentName: ENS_PARENT_NAME, label: handle, owner, signerLabel: MINTER_KEY });
           await setAgentCardRecord({ name: ensName, uri, signerLabel: ensName });
           ensRegistered = true;
         }

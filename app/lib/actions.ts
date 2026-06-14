@@ -12,22 +12,27 @@ import {
   parseEther,
   parseUnits,
   type Address,
+  type Chain,
 } from "viem";
+import { mainnet, base, arbitrum, optimism, polygon } from "viem/chains";
 import {
-  CHAIN,
   USDC,
   USDC_SEND_CAP,
   ETH_SEND_CAP,
   agentCardUri,
   ENS_ONCHAIN_MINTING,
+  DEFI_CHAIN,
+  DEFI_CHAIN_ID,
+  DEFI_RPC_URL,
   SWAP_CHAIN,
-  SWAP_CHAIN_ID,
-  BASE_SEPOLIA_RPC_URL,
   SWAP_TOKENS,
   SWAP_CAP_USD,
+  LIFI_VAULTS,
+  LIFI_CAP_USD,
 } from "./chain";
-import { publicClient } from "./evm";
+import { defiClient } from "./evm";
 import { getSwapQuote } from "./swap";
+import { composeSwapAndZap, bridgeQuote } from "./lifi";
 import { getSigner, ensureAgentWallet } from "./dynamic-server";
 import { seedGasIfLow } from "./minter";
 import {
@@ -38,7 +43,26 @@ import {
 } from "./ens";
 import { registerIdentity, ownsIdentity } from "./erc8004";
 import { getWallet, updateWallet, appendChild } from "./wallet-store";
-import type { ProposalCard, ExecuteResponse, SpawnSubagentDetails, SwapDetails } from "./types";
+import type {
+  ProposalCard,
+  ExecuteResponse,
+  SpawnSubagentDetails,
+  SwapDetails,
+  LifiZapDetails,
+  LifiBridgeDetails,
+} from "./types";
+
+/** Signer options for the DeFi/value layer (Base mainnet — sends, swaps, LI.FI). */
+const DEFI_SIGNER = { chain: DEFI_CHAIN, chainId: DEFI_CHAIN_ID, rpcUrl: DEFI_RPC_URL };
+
+/** viem chains the bridge executor can sign a SOURCE tx on (uses each chain's default RPC). */
+const BRIDGE_VIEM_CHAINS: Record<number, Chain> = {
+  1: mainnet,
+  8453: base,
+  42161: arbitrum,
+  10: optimism,
+  137: polygon,
+};
 
 export async function executeProposal(card: ProposalCard): Promise<ExecuteResponse> {
   switch (card.details.action) {
@@ -48,6 +72,10 @@ export async function executeProposal(card: ProposalCard): Promise<ExecuteRespon
       return sendEth(card.agent, card.details);
     case "swap":
       return swap(card.agent, card.details);
+    case "lifi_zap":
+      return lifiZap(card.agent, card.details);
+    case "lifi_bridge":
+      return lifiBridge(card.agent, card.details);
     case "spawn_subagent":
       return spawnSubagent(card.details);
     default:
@@ -55,7 +83,7 @@ export async function executeProposal(card: ProposalCard): Promise<ExecuteRespon
   }
 }
 
-/** Send native ETH from an agent's wallet. The agent pays gas from the same balance. */
+/** Send native ETH from an agent's wallet on Base. The agent pays gas from the same balance. */
 async function sendEth(
   agent: string,
   details: { to: string; amount: string },
@@ -71,7 +99,7 @@ async function sendEth(
     return { ok: false, error: `Amount ${amount} exceeds the ${ETH_SEND_CAP} ETH cap` };
   }
 
-  const signer = await getSigner(agent);
+  const signer = await getSigner(agent, DEFI_SIGNER);
   const account = signer.account;
   if (!account) return { ok: false, error: "Agent wallet has no account" };
 
@@ -80,9 +108,9 @@ async function sendEth(
       to: details.to as Address,
       value: parseEther(details.amount),
       account,
-      chain: CHAIN,
+      chain: DEFI_CHAIN,
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await defiClient.waitForTransactionReceipt({ hash });
     return receipt.status === "success"
       ? { ok: true, hash }
       : { ok: false, hash, error: "Transaction reverted" };
@@ -92,10 +120,9 @@ async function sendEth(
 }
 
 /**
- * Execute a real Dynamic-routed swap on the swap chain (Base Sepolia). Re-quotes FRESH at
- * execute time (quotes are snapshots), enforces a notional USD cap, approves the ERC-20 if the
- * quote asks for it, then signs+broadcasts the swap tx via the agent's server wallet on that
- * chain (same MPC address, different chain).
+ * Execute a real Dynamic-routed swap on Base mainnet. Re-quotes FRESH at execute time (quotes are
+ * snapshots), enforces a notional USD cap, approves the ERC-20 if the quote asks for it, then
+ * signs+broadcasts the swap tx via the agent's server wallet on Base (same MPC address).
  */
 async function swap(agent: string, details: SwapDetails): Promise<ExecuteResponse> {
   const from = SWAP_TOKENS[details.fromSymbol.toUpperCase()];
@@ -116,8 +143,8 @@ async function swap(agent: string, details: SwapDetails): Promise<ExecuteRespons
 
     const quote = await getSwapQuote({ account, fromToken: from.address, toToken: to.address, fromAmount });
 
-    // Fail CLOSED: if the quote carries no USD notional we can't prove we're under the
-    // cap, so refuse rather than letting `?? "0"` silently wave the swap through.
+    // Fail CLOSED: if the quote carries no USD notional we can't prove we're under the cap,
+    // so refuse rather than letting `?? "0"` silently wave the swap through.
     const usd = quote.from.amountUSD != null ? Number(quote.from.amountUSD) : NaN;
     if (!Number.isFinite(usd)) {
       return { ok: false, error: "Swap quote returned no USD value; refusing to bypass the cap" };
@@ -128,19 +155,14 @@ async function swap(agent: string, details: SwapDetails): Promise<ExecuteRespons
     const evmTx = quote.signingPayload.evmTransaction;
     if (!evmTx) return { ok: false, error: "Quote returned no executable transaction" };
 
-    const signer = await getSigner(agent, {
-      chain: SWAP_CHAIN,
-      chainId: SWAP_CHAIN_ID,
-      rpcUrl: BASE_SEPOLIA_RPC_URL,
-    });
+    const signer = await getSigner(agent, DEFI_SIGNER);
     const account_ = signer.account;
     if (!account_) return { ok: false, error: "Agent wallet has no account" };
-    const swapPublic = createPublicClient({ chain: SWAP_CHAIN, transport: http(BASE_SEPOLIA_RPC_URL) });
 
     // ERC-20 approval first, if the quote requires one (skip for native-token swaps).
     const approval = quote.signingPayload.evmApproval;
     if (approval) {
-      const allowance = (await swapPublic.readContract({
+      const allowance = (await defiClient.readContract({
         address: approval.tokenAddress,
         abi: erc20Abi,
         functionName: "allowance",
@@ -155,7 +177,7 @@ async function swap(agent: string, details: SwapDetails): Promise<ExecuteRespons
           account: account_,
           chain: SWAP_CHAIN,
         });
-        await swapPublic.waitForTransactionReceipt({ hash: approveHash });
+        await defiClient.waitForTransactionReceipt({ hash: approveHash });
       }
     }
 
@@ -166,7 +188,7 @@ async function swap(agent: string, details: SwapDetails): Promise<ExecuteRespons
       account: account_,
       chain: SWAP_CHAIN,
     });
-    const receipt = await swapPublic.waitForTransactionReceipt({ hash });
+    const receipt = await defiClient.waitForTransactionReceipt({ hash });
     return receipt.status === "success"
       ? { ok: true, hash }
       : { ok: false, hash, error: "Swap transaction reverted" };
@@ -176,11 +198,188 @@ async function swap(agent: string, details: SwapDetails): Promise<ExecuteRespons
 }
 
 /**
+ * Execute a LI.FI swap-and-zap on Base mainnet. Re-compiles FRESH (quotes are snapshots),
+ * enforces a notional USD cap, approves the execution proxy for each input token, then submits
+ * the compiled flow tx (one atomic swap→zap). The agent's EOA is the signer + source of funds;
+ * `result.userProxy` is its deterministic execution proxy (read from the compile, never hardcoded).
+ */
+async function lifiZap(agent: string, details: LifiZapDetails): Promise<ExecuteResponse> {
+  const from = SWAP_TOKENS[details.fromSymbol.toUpperCase()];
+  if (!from) {
+    return { ok: false, error: `Unknown token (supported: ${Object.keys(SWAP_TOKENS).join(", ")})` };
+  }
+  const vault = LIFI_VAULTS[details.vault.toUpperCase()];
+  if (!vault) {
+    return { ok: false, error: `Unknown vault (supported: ${Object.keys(LIFI_VAULTS).join(", ")})` };
+  }
+  const amount = Number(details.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, error: `Invalid amount: ${details.amount}` };
+  }
+
+  try {
+    const w = await getWallet(agent);
+    if (!w) return { ok: false, error: `No wallet for "${agent}"` };
+    const signerAddr = w.address as Address;
+
+    const result = await composeSwapAndZap({
+      signer: signerAddr,
+      fromToken: from.address,
+      fromDecimals: from.decimals,
+      amount: details.amount,
+      vaultToken: vault.address,
+    });
+
+    if (result.status !== "success") {
+      const reason =
+        result.status === "partial"
+          ? result.error?.message ?? "simulation reverted"
+          : "compile failed";
+      return { ok: false, error: `LI.FI compile ${result.status}: ${reason}` };
+    }
+
+    // Notional cap (defense in depth) from the compile's price impact.
+    const usd = result.priceImpact?.inputValueUsd ?? 0;
+    if (usd > LIFI_CAP_USD) {
+      return { ok: false, error: `Flow notional $${usd.toFixed(2)} exceeds the $${LIFI_CAP_USD} cap` };
+    }
+
+    const signer = await getSigner(agent, DEFI_SIGNER);
+    const account = signer.account;
+    if (!account) return { ok: false, error: "Agent wallet has no account" };
+
+    // Approvals first: approve the execution proxy for each input token (prebuilt approve tx).
+    for (const a of result.approvals ?? []) {
+      const allowance = (await defiClient.readContract({
+        address: a.token as Address,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [signerAddr, a.spender as Address],
+      })) as bigint;
+      if (allowance < BigInt(a.amount)) {
+        const approveHash = await signer.sendTransaction({
+          to: a.transactionRequest.to as Address,
+          data: a.transactionRequest.data as `0x${string}`,
+          value: BigInt(a.transactionRequest.value ?? "0"),
+          account,
+          chain: DEFI_CHAIN,
+        });
+        await defiClient.waitForTransactionReceipt({ hash: approveHash });
+      }
+    }
+
+    // The compiled flow tx — `to` is the execution proxy (or the ProxyFactory on first use).
+    const tx = result.transactionRequest;
+    const hash = await signer.sendTransaction({
+      to: tx.to as Address,
+      data: tx.data as `0x${string}`,
+      value: BigInt(tx.value ?? "0"),
+      account,
+      chain: DEFI_CHAIN,
+    });
+    const receipt = await defiClient.waitForTransactionReceipt({ hash });
+    return receipt.status === "success"
+      ? { ok: true, hash }
+      : { ok: false, hash, error: "Flow transaction reverted" };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Execute a LI.FI cross-chain bridge via the REST /v1/quote primitive. Re-quotes fresh, enforces
+ * the USD cap, approves the ERC-20 spender if needed, then signs+broadcasts the source-chain tx
+ * (funds settle on the destination asynchronously). Returns the source tx hash once confirmed.
+ */
+async function lifiBridge(agent: string, details: LifiBridgeDetails): Promise<ExecuteResponse> {
+  const amount = Number(details.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, error: `Invalid amount: ${details.amount}` };
+  }
+  const srcChain = BRIDGE_VIEM_CHAINS[details.fromChainId];
+  if (!srcChain) {
+    return { ok: false, error: `Unsupported source chain ${details.fromChainId}` };
+  }
+  const srcRpc = srcChain.rpcUrls.default.http[0];
+
+  try {
+    const w = await getWallet(agent);
+    if (!w) return { ok: false, error: `No wallet for "${agent}"` };
+    const addr = w.address as Address;
+
+    const quote = await bridgeQuote({
+      fromChain: details.fromChainId,
+      toChain: details.toChainId,
+      fromToken: details.token,
+      toToken: details.token,
+      fromAmount: parseUnits(details.amount, 6).toString(), // demo token (USDC) is 6 decimals
+      fromAddress: addr,
+      toAddress: addr,
+    });
+
+    const usd = Number(quote.estimate?.fromAmountUSD ?? "0");
+    if (usd > LIFI_CAP_USD) {
+      return { ok: false, error: `Bridge notional $${usd} exceeds the $${LIFI_CAP_USD} cap` };
+    }
+    const tx = quote.transactionRequest;
+    if (!tx) return { ok: false, error: "Quote returned no executable transaction (no route?)" };
+
+    const srcPublic = createPublicClient({ chain: srcChain, transport: http(srcRpc) });
+    const signer = await getSigner(agent, {
+      chain: srcChain,
+      chainId: details.fromChainId,
+      rpcUrl: srcRpc,
+    });
+    const account = signer.account;
+    if (!account) return { ok: false, error: "Agent wallet has no account" };
+
+    // Approve the LI.FI spender if the source token needs it.
+    const spender = quote.estimate?.approvalAddress;
+    const fromTokenAddr = quote.action?.fromToken?.address;
+    if (spender && fromTokenAddr) {
+      const need = parseUnits(details.amount, quote.action?.fromToken?.decimals ?? 6);
+      const allowance = (await srcPublic.readContract({
+        address: fromTokenAddr,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [addr, spender],
+      })) as bigint;
+      if (allowance < need) {
+        const approveHash = await signer.writeContract({
+          address: fromTokenAddr,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [spender, need],
+          account,
+          chain: srcChain,
+        });
+        await srcPublic.waitForTransactionReceipt({ hash: approveHash });
+      }
+    }
+
+    const hash = await signer.sendTransaction({
+      to: tx.to,
+      data: tx.data,
+      value: BigInt(tx.value ?? "0"),
+      account,
+      chain: srcChain,
+    });
+    const receipt = await srcPublic.waitForTransactionReceipt({ hash });
+    // Source confirmed = bridge initiated; destination settles asynchronously (poll /v1/status).
+    return receipt.status === "success"
+      ? { ok: true, hash }
+      : { ok: false, hash, error: "Bridge source transaction reverted" };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
  * Spawn a sub-agent. The headline (always works): a NEW server wallet, linked into the
- * parent's cluster, funded, with its own ERC-8004 identity. The nested ENS subname is
- * BEST EFFORT — it only mints if the parent agent actually owns its own ENS name (i.e. the
- * ENS parent chain is set up). Otherwise it's deferred, so spawning never hard-fails on the
- * Sepolia ENS-registrar situation. Mirrors provisionIdentity's decoupling.
+ * parent's cluster, funded, with its own ERC-8004 identity (all on Ethereum L1). The nested ENS
+ * subname is BEST EFFORT — it only mints if the parent dæmon actually owns its own ENS name on
+ * L1 (i.e. the cluster is set up). Otherwise it's deferred, so spawning never hard-fails.
+ * Mirrors provisionIdentity's decoupling.
  */
 async function spawnSubagent(
   details: SpawnSubagentDetails,
@@ -192,7 +391,8 @@ async function spawnSubagent(
 
     // 1. The sub-agent's own wallet (it IS this address), linked into the parent's cluster.
     //    ensureAgentWallet is idempotent — re-confirming the same spawn returns the existing
-    //    wallet instead of minting a second one and orphaning the first one's key shares.
+    //    wallet instead of minting a second Dynamic wallet and orphaning the first. appendChild
+    //    reads the parent inside the store lock, so concurrent spawns can't clobber the cluster.
     const child = await ensureAgentWallet(childKey, { parentEnsName: parent.ensName });
     const childAddr = child.address as Address;
     await appendChild(parentKey, childKey);
@@ -207,9 +407,9 @@ async function spawnSubagent(
       hash = r.hash;
     }
 
-    // 3. Nested ENS subname. OFF on Sepolia (ENS_ONCHAIN_MINTING=false) — the sub-agent's ENS
-    //    name is a label; its real on-chain identity is its wallet + ERC-8004. v1 minting kept
-    //    behind the flag for a v1-live network; best-effort + decoupled so it never fails the spawn.
+    // 3. Nested ENS subname on L1 — the parent dæmon owns its own name, so it mints the child's
+    //    subname itself. Best-effort + decoupled so a gas hiccup never loses the cluster node
+    //    (the wallet + ERC-8004 identity are already done).
     if (ENS_ONCHAIN_MINTING) {
       try {
         const parentAddr = parent.address as Address;
@@ -252,7 +452,7 @@ async function sendUsdc(
   }
 
   const value = parseUnits(details.amount, USDC.decimals);
-  const signer = await getSigner(agent);
+  const signer = await getSigner(agent, DEFI_SIGNER);
   const account = signer.account;
   if (!account) return { ok: false, error: "Agent wallet has no account" };
 
@@ -263,9 +463,9 @@ async function sendUsdc(
       functionName: "transfer",
       args: [details.to as Address, value],
       account,
-      chain: CHAIN,
+      chain: DEFI_CHAIN,
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await defiClient.waitForTransactionReceipt({ hash });
     return receipt.status === "success"
       ? { ok: true, hash }
       : { ok: false, hash, error: "Transaction reverted" };

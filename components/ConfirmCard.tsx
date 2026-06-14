@@ -12,6 +12,8 @@ const ACTION_LABEL: Record<ProposalCard['action'], string> = {
   send_eth: 'Send ETH',
   swap: 'Swap',
   spawn_subagent: 'Spawn sub-agent',
+  lifi_zap: 'Swap & Zap',
+  lifi_bridge: 'Bridge',
 };
 
 function detailRows(proposal: ProposalCard): { label: string; value: string }[] {
@@ -31,12 +33,24 @@ function detailRows(proposal: ProposalCard): { label: string; value: string }[] 
       return [
         { label: 'Swap', value: `${d.amount} ${d.fromSymbol}` },
         { label: 'For', value: d.toSymbol },
-        { label: 'Chain', value: 'Base Sepolia' },
+        { label: 'Chain', value: 'Base' },
       ];
     case 'spawn_subagent':
       return [
         { label: 'Agent', value: d.label },
         { label: 'Purpose', value: d.purpose },
+      ];
+    case 'lifi_zap':
+      return [
+        { label: 'Deposit', value: `${d.amount} ${d.fromSymbol}` },
+        { label: 'Into', value: d.vaultLabel },
+        { label: 'Chain', value: 'Base' },
+      ];
+    case 'lifi_bridge':
+      return [
+        { label: 'Bridge', value: `${d.amount} ${d.token}` },
+        { label: 'From', value: d.fromChain },
+        { label: 'To', value: d.toChain },
       ];
   }
 }

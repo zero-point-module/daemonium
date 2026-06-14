@@ -1,17 +1,18 @@
 /**
  * Dynamic server-wallet integration — "the agent IS the wallet; Dynamic is the manager".
  *
- * Each agent (a user's Ignis, and every sub-agent it spawns) gets its OWN MPC server wallet
- * via createWalletAccount. We key every wallet by its ENS name (e.g.
- * "ignis-a1b2.daemonium.eth"), so the same string is the store key, the signer key, and the
- * identity. The backend holds the key shares and signs autonomously; the human confirmation
- * gate lives one layer up in /api/daemon/execute.
+ * Each agent (a user's dæmon, and every sub-agent it spawns) gets its OWN MPC server wallet via
+ * createWalletAccount. We key every wallet by its ENS name, so the same string is the index key,
+ * the signer key, and the identity. We persist NO key material and NOT even Dynamic's
+ * `walletMetadata`: wallets are created with `backUpToDynamic: true`, and signable metadata is
+ * reconstructed from Dynamic's `getEvmWallets()` at sign time (then shares are recovered from
+ * Dynamic's backup via the password). Our store holds only a thin name→address index.
  */
 import "server-only";
 import { DynamicEvmWalletClient } from "@dynamic-labs-wallet/node-evm";
-import { ThresholdSignatureScheme } from "@dynamic-labs-wallet/node";
+import { ThresholdSignatureScheme, type WalletMetadata } from "@dynamic-labs-wallet/node";
 import type { WalletClient, Chain } from "viem";
-import { CHAIN, CHAIN_ID, SEPOLIA_RPC_URL } from "./chain";
+import { IDENTITY_CHAIN, IDENTITY_CHAIN_ID, IDENTITY_RPC_URL } from "./chain";
 import { getWallet, putWallet, type StoredWallet } from "./wallet-store";
 import { withLock } from "./lock";
 
@@ -40,9 +41,48 @@ export function getServerClient(): Promise<DynamicEvmWalletClient> {
   return clientPromise;
 }
 
+/* ── Dynamic is the wallet store ──────────────────────────────────────────────────────────────
+ * `getEvmWallets()` returns each wallet's identity + `externalServerKeySharesBackupInfo` (the
+ * backup pointer) — i.e. everything needed to rebuild a signable `WalletMetadata`. We cache the
+ * reconstruction per process (keyed by lowercase address), refreshing on a miss. createWallet
+ * also seeds the cache so a freshly minted wallet signs immediately, before it propagates to the
+ * list (eventual consistency). */
+const metaCache = new Map<string, WalletMetadata>();
+
+/** Seed the metadata cache (used right after creating a wallet, and for any pinned wallet). */
+export function seedWalletMetadata(address: string, metadata: WalletMetadata): void {
+  metaCache.set(address.toLowerCase(), metadata);
+}
+
+async function refreshWalletMetadata(): Promise<void> {
+  const client = await getServerClient();
+  const wallets = await client.getEvmWallets();
+  for (const w of wallets) {
+    metaCache.set(w.accountAddress.toLowerCase(), {
+      walletId: w.walletId,
+      accountAddress: w.accountAddress,
+      chainName: w.chainName,
+      thresholdSignatureScheme: w.thresholdSignatureScheme,
+      derivationPath: w.derivationPath,
+      externalServerKeySharesBackupInfo: w.externalServerKeySharesBackupInfo,
+    } as WalletMetadata);
+  }
+}
+
+/** Signable `walletMetadata` for an address, reconstructed from Dynamic (cached per process). */
+export async function getWalletMetadataForAddress(address: string): Promise<WalletMetadata> {
+  const key = address.toLowerCase();
+  if (!metaCache.has(key)) await refreshWalletMetadata();
+  const meta = metaCache.get(key);
+  if (!meta) throw new Error(`No Dynamic wallet found for address ${address}`);
+  return meta;
+}
+
 /**
- * Create a brand-new MPC wallet for an agent (keyed by its ENS name) and persist it.
- * Call once per agent — this is what makes each (sub-)agent its own wallet.
+ * Create a brand-new MPC wallet for an agent (keyed by its ENS name) and index it. Call once per
+ * agent — this is what makes each (sub-)agent its own wallet. We store only the address (the
+ * index); the signable metadata is seeded into the in-process cache and otherwise comes from
+ * Dynamic.
  */
 export async function createAgentWallet(
   ensName: string,
@@ -51,17 +91,19 @@ export async function createAgentWallet(
   const client = await getServerClient();
   const password = requireEnv("DAEMON_WALLET_PASSWORD");
 
+  // backUpToDynamic:true → Dynamic stores + can recover the key share; we keep no share locally.
   const result = await client.createWalletAccount({
     thresholdSignatureScheme: ThresholdSignatureScheme.TWO_OF_TWO,
     password,
     backUpToDynamic: true,
   });
 
+  const address = result.walletMetadata.accountAddress;
+  seedWalletMetadata(address, result.walletMetadata); // sign immediately, pre-propagation
+
   const record: StoredWallet = {
-    label: ensName, // store key = ENS name
-    address: result.walletMetadata.accountAddress,
-    walletMetadata: result.walletMetadata,
-    externalServerKeyShares: result.externalServerKeyShares,
+    label: ensName, // index key = ENS name
+    address,
     createdAt: new Date().toISOString(),
     ensName,
     parent: opts.parentEnsName,
@@ -86,11 +128,12 @@ export function ensureAgentWallet(
 }
 
 /**
- * A viem WalletClient backed by the agent's MPC key shares. Every call reloads the shares
- * from the store (the SDK is stateless). writeContract/sendTransaction on this client sign
- * via MPC AND broadcast. Defaults to Ethereum Sepolia; pass `opts` to target another chain
- * (e.g. Base Sepolia for swaps — the same MPC address works on any EVM chain). `key` is the
- * agent's ENS name.
+ * A viem WalletClient backed by the agent's MPC wallet. We look up the agent's address in our
+ * index, reconstruct its `walletMetadata` from Dynamic, and pass `walletMetadata` + `password`;
+ * the SDK recovers the key share from Dynamic's backup (one round-trip per sign — no local share
+ * storage). writeContract/sendTransaction on this client sign via MPC AND broadcast. Defaults to
+ * the IDENTITY chain (Ethereum mainnet — ENS/ERC-8004); pass `opts` to target the DeFi chain
+ * (Base mainnet for sends/swaps/LI.FI). `key` is the agent's ENS name.
  */
 export async function getSigner(
   key: string,
@@ -98,13 +141,13 @@ export async function getSigner(
 ): Promise<WalletClient> {
   const wallet = await getWallet(key);
   if (!wallet) throw new Error(`No wallet for agent "${key}"`);
+  const walletMetadata = await getWalletMetadataForAddress(wallet.address);
   const client = await getServerClient();
   return client.getWalletClient({
-    walletMetadata: wallet.walletMetadata,
-    externalServerKeyShares: wallet.externalServerKeyShares,
+    walletMetadata,
     password: requireEnv("DAEMON_WALLET_PASSWORD"),
-    chain: opts.chain ?? CHAIN,
-    chainId: opts.chainId ?? CHAIN_ID,
-    rpcUrl: opts.rpcUrl ?? SEPOLIA_RPC_URL,
+    chain: opts.chain ?? IDENTITY_CHAIN,
+    chainId: opts.chainId ?? IDENTITY_CHAIN_ID,
+    rpcUrl: opts.rpcUrl ?? IDENTITY_RPC_URL,
   });
 }

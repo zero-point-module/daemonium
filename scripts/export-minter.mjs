@@ -4,9 +4,10 @@
  *
  *   npm run minter:export -- [path/to/.daemon/wallets.json]   # defaults to ./.daemon/wallets.json
  *
- * Run it against whichever store holds the minter you want to canonicalize. The printed value
- * contains the minter's MPC key shares — treat it like any other secret: paste it into .env
- * (local) and your deploy's env. Do NOT commit it or paste it into chat/logs.
+ * Run it against whichever store holds the minter you want to canonicalize. The printed value is
+ * now just the minter's address index (signable metadata is reconstructed from Dynamic's
+ * getEvmWallets(); key shares live in Dynamic's backup, recovered via DAEMON_WALLET_PASSWORD).
+ * Pin it so every environment uses the SAME approved minter: paste into .env (local) + deploy env.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";

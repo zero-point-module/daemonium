@@ -32,24 +32,26 @@ signature scheme)**. Instead of one private key, the key is mathematically split
 **shares** held by different parties. To sign, a _threshold_ of those shares cooperate in a
 protocol — and the full private key is **never reconstructed** in memory, on any machine.
 
-We use **`TWO_OF_TWO`**: two shares exist, and _both_ are needed to sign.
+We use **`TWO_OF_TWO`**: two shares exist, and _both_ are needed to sign. One is the
+**external server key share**; the other is held by **Dynamic's** MPC relay. So a signature
+requires both halves to participate — neither alone can move funds.
 
-- One share is our **external server key share** — we hold it (in our store).
-- The other is held by **Dynamic's** MPC relay.
-
-So a signature requires _our backend_ **and** _Dynamic_ to participate. Neither alone can move
-funds. That's the security win: even if our server is compromised, the attacker has one share,
-not the key. (Other schemes exist — `TWO_OF_THREE`, `THREE_OF_FIVE` — for backup/recovery
-trade-offs. `2-of-2` is the simplest and right for a hackathon.)
+We create wallets with **`backUpToDynamic: true`**, which means Dynamic also stores our share in
+its **key-share backup service**, encrypted under our `password`. The payoff (see the storage
+section below): we **don't persist the sensitive share ourselves** — Dynamic supplies it from
+backup at sign time. The security model still holds: signing needs both shares, and the backup is
+locked behind `DAEMON_WALLET_PASSWORD` (a server-only secret). (Other schemes exist —
+`TWO_OF_THREE`, `THREE_OF_FIVE` — for richer recovery trade-offs; `2-of-2` + backup is the
+simplest and right for a hackathon.)
 
 ```ts
 // app/lib/dynamic-server.ts
 const result = await client.createWalletAccount({
   thresholdSignatureScheme: ThresholdSignatureScheme.TWO_OF_TWO,
-  password,            // encrypts our key share at rest
-  backUpToDynamic: true,
+  password,            // protects the backed-up key share
+  backUpToDynamic: true, // Dynamic stores the share → we persist only walletMetadata
 });
-// → { walletMetadata, externalServerKeyShares, publicKeyHex, ... }
+// → { walletMetadata, ... }  (we keep only walletMetadata)
 ```
 
 ## The packages
@@ -68,38 +70,53 @@ So there are **two kinds of wallet** in Daemonium:
 | Embedded wallet | the human | frontend (React SDK) | login, approver, funding source |
 | Server wallet | each agent | backend (node-evm SDK) | the agent's own funds + identity |
 
-## The most important technical fact: the SDK is **stateless**
+## The most important technical fact: **Dynamic is the wallet store** (we persist almost nothing)
 
-`createWalletAccount` returns two things and **then forgets them** — _we_ own persistence:
+`createWalletAccount` returns and **then forgets** everything — but we lean on Dynamic so hard that
+we persist **no wallet data at all**, not even metadata. Two facts make this work:
 
-- `walletMetadata` — non-sensitive (walletId, address, scheme, derivation path).
-- `externalServerKeyShares` — **sensitive**: our half of the key.
+1. Wallets are created with **`backUpToDynamic: true`**, so the key share lives in Dynamic's backup,
+   recovered with our `password` at sign time (we never store or pass shares).
+2. **`getEvmWallets()` returns each wallet's `externalServerKeySharesBackupInfo`** — the backup
+   pointer. That plus `walletId`/`accountAddress`/`chainName`/`scheme`/`derivationPath` is exactly a
+   signable **`WalletMetadata`**. So we **reconstruct metadata from Dynamic on demand** (cached per
+   process) and never persist it. Dynamic _is_ the wallet store.
 
-> Lose the key shares → the wallet, and any funds in it, are **unrecoverable**. Dynamic does
-> not store our share for us, even with `backUpToDynamic: true` (that's a separate recovery
-> path; we still read our share from our own store to sign).
-
-So before _every_ signing operation we reload both and pass them in explicitly. We persist to a
-gitignored JSON file for the hackathon (`app/lib/wallet-store.ts` → `.daemon/wallets.json`);
-production would use a vault/KMS for the shares and a database for the metadata.
+The one thing Dynamic can't tell us is **which wallet is which dæmon** (`createWalletAccount` takes no
+alias), so we keep a thin **name→address index** — the agent's ENS name → its address, plus the
+cluster tree (`agentId`, `parent`, `children`). That's small and non-sensitive. It lives in
+`app/lib/kv.ts`: a serverless Redis (Upstash / Vercel KV) when configured, else a gitignored JSON file
+for local dev — **so nothing requires a writable filesystem to deploy.**
 
 ```ts
-// every sign reloads the shares — the client holds no state between calls
-export async function getSigner(label: string): Promise<WalletClient> {
-  const wallet = await getWallet(label);            // from .daemon/wallets.json
+// app/lib/dynamic-server.ts — no local shares, no stored metadata.
+export async function getSigner(key: string, opts = {}): Promise<WalletClient> {
+  const wallet = await getWallet(key);                          // index → address (from KV)
+  const walletMetadata = await getWalletMetadataForAddress(wallet.address); // rebuilt from Dynamic
   const client = await getServerClient();
   return client.getWalletClient({
-    walletMetadata: wallet.walletMetadata,
-    externalServerKeyShares: wallet.externalServerKeyShares,
-    password: process.env.DAEMON_WALLET_PASSWORD!,
-    chain: CHAIN, chainId: 11155111, rpcUrl: SEPOLIA_RPC_URL,
+    walletMetadata,
+    password: process.env.DAEMON_WALLET_PASSWORD!,              // decrypts the backed-up share
+    chain: opts.chain ?? IDENTITY_CHAIN,                        // default L1; opts → Base
+    chainId: opts.chainId ?? IDENTITY_CHAIN_ID,
+    rpcUrl: opts.rpcUrl ?? IDENTITY_RPC_URL,
   });
 }
 ```
 
-We verified this loop the right way: create → persist → **restart the server** → reload from
-disk → the address is identical and it can still sign. Testing only create+sign in one process
-would have hidden the persistence requirement.
+This removed an entire class of risk — there is **no key material and no wallet metadata in our store
+at all**, only an address index. (Trade-offs: a `getEvmWallets()` round-trip on a cache miss to rebuild
+metadata, and a share-recovery round-trip per signature. We seed the cache on wallet creation so a
+freshly minted wallet signs immediately, before it propagates to the list.) Verify the loop the right
+way: create → **restart** → reload the index → sign with reconstructed metadata + password → a real tx
+broadcasts.
+
+### One wallet, two chains (the hybrid topology)
+
+`getSigner` takes a per-call chain override because the same MPC address is identical on every EVM
+chain. Daemonium uses that to split layers: **identity** (ENS + ERC-8004) on **Ethereum mainnet**
+(the default), and **value** (sends, swaps, LI.FI) on **Base mainnet** (cheap gas) via the
+`DEFI_SIGNER` override. See [`ens.md`](./ens.md) and [`lifi.md`](./lifi.md).
 
 ## Signing + broadcasting
 
@@ -131,22 +148,27 @@ await client.authenticateApiToken(process.env.DYNAMIC_API_TOKEN!);
 
 Calling `createWalletAccount` again mints another independent wallet — this is how each
 sub-agent becomes its own wallet, and they all show up in the Dynamic dashboard (the "manager"
-view). Secrets (`DYNAMIC_API_TOKEN`, key shares, `DAEMON_WALLET_PASSWORD`) live only on the
-server; only the public `NEXT_PUBLIC_DYNAMIC_ENVIRONMENT_ID` reaches the browser.
+view). Secrets (`DYNAMIC_API_TOKEN`, `DAEMON_WALLET_PASSWORD`, and the KV credentials) live only
+on the server; only the public `NEXT_PUBLIC_DYNAMIC_ENVIRONMENT_ID` reaches the browser. (Key
+shares are held by Dynamic's backup, not by us — see the storage section.)
 
 ## Where the human comes back in: the confirm gate
 
 Autonomy is powerful and dangerous, so safety is structural, not cosmetic. The agent's
 state-changing tools **never sign** — they only _propose_ (mint a `ProposalCard` with an opaque
-`executionId` and emit a `proposal` event). The gated actions are **`send_usdc`**, **`send_eth`**
-(native ETH, for gas or funding another agent), **`swap`** (token swap via Dynamic's Swap API —
-runs on **Base Sepolia**, since the Swap API supports it despite the docs saying "mainnet only";
-Ethereum Sepolia is genuinely unsupported. `app/lib/swap.ts` quotes, the executor re-quotes +
-approves + signs on Base Sepolia via the same MPC address), and **`spawn_subagent`**. The **only** code that
-loads key shares and signs is one route, `POST /api/daemon/execute`, which runs after the human
-taps Confirm. (Identity claiming is *not* gated — it's auto-provisioned per-user at handle pick;
-see `docs/ens.md` and `app/lib/provision.ts`. Read-only tools — balance/activity/ENS-resolve/
-delegate-to-subagent — run immediately.)
+`executionId` and emit a `proposal` event). The gated actions all run on **Base mainnet** (the
+value layer): **`send_usdc`**, **`send_eth`** (native ETH, for gas or funding another agent),
+**`swap`** (token swap via Dynamic's Swap API on Base mainnet — `app/lib/swap.ts` quotes, the
+executor re-quotes + approves + signs via the same MPC address), **`lifi_zap`** and
+**`bridge_tokens`** (LI.FI swap-and-zap + cross-chain bridge — see [`lifi.md`](./lifi.md)), and
+**`spawn_subagent`** (which provisions identity on L1). The **only** code that signs is one route,
+`POST /api/daemon/execute`, which runs after the human taps Confirm. (Identity claiming is *not*
+gated — it's auto-provisioned per-user at handle pick; see `docs/ens.md` and `app/lib/provision.ts`.
+Read-only tools — balance/activity/ENS-resolve/delegate-to-subagent — run immediately.)
+
+Because real money now lives on mainnet, each executor also enforces a hard per-tx cap
+(`USDC_SEND_CAP`, `ETH_SEND_CAP`, `SWAP_CAP_USD`, `LIFI_CAP_USD`) as defense in depth on top of
+the confirm gate.
 
 We chose this **propose/execute split over a private key in the client** _and_ over ai-sdk's
 built-in `needsApproval`. Why: the client physically cannot sign (it has no shares), so a
@@ -173,8 +195,10 @@ Lesson: any server SDK with native/WASM bits usually needs `serverExternalPackag
 ## What we learned
 
 - Server wallets make "an agent that owns value" real, without a bare private key.
-- MPC/TSS means the key is never whole anywhere — signing is a _protocol_, and persistence of
-  _our share_ is our responsibility (and a single point of data-loss to respect).
+- MPC/TSS means the key is never whole anywhere — signing is a _protocol_. With
+  `backUpToDynamic: true` we persist only the non-sensitive `walletMetadata` and let Dynamic
+  recover the share from backup, so our store holds **no** key material (one round-trip/sign is
+  the cost).
 - The SDK handing back a viem `WalletClient` keeps everything downstream boringly standard.
 - The safest place for a confirmation gate is a structural one: keep signing in a single
   server route the client can't reach, not in the agent's reasoning.

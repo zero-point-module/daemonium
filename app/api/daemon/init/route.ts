@@ -6,8 +6,8 @@
  */
 import { erc20Abi, formatEther, formatUnits } from "viem";
 import { ensureAgentWallet } from "@/app/lib/dynamic-server";
-import { publicClient } from "@/app/lib/evm";
-import { USDC, explorerAddress } from "@/app/lib/chain";
+import { defiClient } from "@/app/lib/evm";
+import { USDC, defiExplorerAddress } from "@/app/lib/chain";
 import { verifyUser, AuthError } from "@/app/lib/auth";
 import { resolveUserKey } from "@/app/lib/handles";
 import { withRoute } from "@/app/lib/observe";
@@ -34,9 +34,10 @@ async function postHandler(req: Request) {
     const ignis = await ensureAgentWallet(key);
     const address = ignis.address as `0x${string}`;
 
+    // Spendable balance lives on Base mainnet (the value layer).
     const [eth, usdc] = await Promise.all([
-      publicClient.getBalance({ address }),
-      publicClient.readContract({
+      defiClient.getBalance({ address }),
+      defiClient.readContract({
         address: USDC.address,
         abi: erc20Abi,
         functionName: "balanceOf",
@@ -47,8 +48,8 @@ async function postHandler(req: Request) {
     return Response.json({
       identity: { ensName: ignis.ensName, address: ignis.address },
       balances: { eth: formatEther(eth), usdc: formatUnits(usdc, USDC.decimals) },
-      explorer: explorerAddress(ignis.address),
-      fundHint: "Send Sepolia ETH + Circle test USDC to the address above before sending.",
+      explorer: defiExplorerAddress(ignis.address),
+      fundHint: "Send a little Base ETH (gas) + Base USDC to the address above before transacting.",
     });
   } catch (err) {
     return Response.json(

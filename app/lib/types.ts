@@ -23,7 +23,13 @@ export type DaemonState =
  * State-changing actions, each gated by a human confirmation. (Identity claiming is no longer
  * here — it's auto-provisioned at handle pick, see app/lib/provision.ts.)
  */
-export type DaemonAction = "send_usdc" | "send_eth" | "swap" | "spawn_subagent";
+export type DaemonAction =
+  | "send_usdc"
+  | "send_eth"
+  | "swap"
+  | "spawn_subagent"
+  | "lifi_zap"
+  | "lifi_bridge";
 
 /** Per-action detail payloads shown on the confirm card (human-readable). */
 export interface SendUsdcDetails {
@@ -57,12 +63,35 @@ export interface SpawnSubagentDetails {
   parentKey: string;
   purpose: string;
 }
+export interface LifiZapDetails {
+  /** Input token symbol on Base (e.g. "USDC" or "WETH"); swapped to USDC then zapped if needed. */
+  fromSymbol: string;
+  /** Human amount of the from-token, e.g. "3". */
+  amount: string;
+  /** Vault key (see LIFI_VAULTS in chain.ts), e.g. "AAVE_USDC". */
+  vault: string;
+  /** Human-readable vault label for the confirm card, e.g. "Aave aBasUSDC". */
+  vaultLabel: string;
+}
+export interface LifiBridgeDetails {
+  /** Token symbol to bridge (e.g. "USDC"). */
+  token: string;
+  /** Human amount, e.g. "5". */
+  amount: string;
+  fromChainId: number;
+  toChainId: number;
+  /** Display names for the confirm card, e.g. "Arbitrum" → "Base". */
+  fromChain: string;
+  toChain: string;
+}
 
 export type ProposalDetails =
   | ({ action: "send_usdc" } & SendUsdcDetails)
   | ({ action: "send_eth" } & SendEthDetails)
   | ({ action: "swap" } & SwapDetails)
-  | ({ action: "spawn_subagent" } & SpawnSubagentDetails);
+  | ({ action: "spawn_subagent" } & SpawnSubagentDetails)
+  | ({ action: "lifi_zap" } & LifiZapDetails)
+  | ({ action: "lifi_bridge" } & LifiBridgeDetails);
 
 /** A pending action awaiting human confirmation. */
 export interface ProposalCard {
