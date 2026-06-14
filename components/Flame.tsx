@@ -46,6 +46,15 @@ export function Flame({
   const [debug, setDebug] = useState(false);
   const [override, setOverride] = useState<DaemonState | null>(null);
   const [tweak, setTweak] = useState<Partial<FlameParams>>({});
+  // Debug-only voice driver: null = use the live TTS amplitude, a number forces
+  // it, talk = auto-oscillate a speech-like envelope. Lets us tune the mouth and
+  // the voice-reactive fire on a phone without triggering real TTS.
+  const [dbgVoice, setDbgVoice] = useState<number | null>(null);
+  const [dbgTalk, setDbgTalk] = useState(false);
+  const dbgVoiceRef = useRef(dbgVoice);
+  dbgVoiceRef.current = dbgVoice;
+  const dbgTalkRef = useRef(dbgTalk);
+  dbgTalkRef.current = dbgTalk;
 
   const effective = override ?? state;
 
@@ -100,7 +109,17 @@ export function Flame({
     let running = true;
     const loop = (t: number) => {
       if (!running) return;
-      r.setVoice(ampRef.current ? ampRef.current() : 0);
+      let v: number;
+      if (dbgTalkRef.current) {
+        // a speech-like envelope from two detuned sines, clamped to 0..1
+        v = Math.max(0, Math.min(1,
+          0.5 + 0.35 * Math.sin(t * 0.011) + 0.25 * Math.sin(t * 0.027 + 1.3)));
+      } else if (dbgVoiceRef.current != null) {
+        v = dbgVoiceRef.current;
+      } else {
+        v = ampRef.current ? ampRef.current() : 0;
+      }
+      r.setVoice(v);
       r.frame(t);
       raf = requestAnimationFrame(loop);
     };
@@ -183,11 +202,17 @@ export function Flame({
           state={effective}
           tweak={tweak}
           base={STATE_PARAMS[effective]}
+          dbgVoice={dbgVoice}
+          dbgTalk={dbgTalk}
+          onVoice={setDbgVoice}
+          onTalk={setDbgTalk}
           onPickState={setOverride}
           onTweak={(key, value) => setTweak((prev) => ({ ...prev, [key]: value }))}
           onReset={() => {
             setOverride(null);
             setTweak({});
+            setDbgVoice(null);
+            setDbgTalk(false);
           }}
         />
       )}
@@ -215,6 +240,10 @@ function FlameDebug({
   state,
   tweak,
   base,
+  dbgVoice,
+  dbgTalk,
+  onVoice,
+  onTalk,
   onPickState,
   onTweak,
   onReset,
@@ -222,6 +251,10 @@ function FlameDebug({
   state: DaemonState;
   tweak: Partial<FlameParams>;
   base: FlameParams;
+  dbgVoice: number | null;
+  dbgTalk: boolean;
+  onVoice: (v: number | null) => void;
+  onTalk: (on: boolean) => void;
   onPickState: (s: DaemonState | null) => void;
   onTweak: (key: keyof FlameParams, value: number) => void;
   onReset: () => void;
@@ -250,6 +283,45 @@ function FlameDebug({
             {s}
           </button>
         ))}
+      </div>
+
+      {/* voice → mouth + fire — a debug driver so we can tune lip-sync without TTS */}
+      <div className="mb-2 rounded bg-white/[0.04] p-2">
+        <div className="mb-1 flex items-center justify-between">
+          <span>voice → mouth</span>
+          <button
+            onClick={() => onTalk(!dbgTalk)}
+            className={`rounded px-2 py-0.5 ${
+              dbgTalk ? 'bg-emerald-400/30 text-white' : 'bg-white/10 text-white/70 hover:bg-white/20'
+            }`}
+          >
+            {dbgTalk ? 'talking…' : 'talk'}
+          </button>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.02}
+          value={dbgVoice ?? 0}
+          onChange={(e) => {
+            onTalk(false);
+            onVoice(parseFloat(e.target.value));
+          }}
+          className="w-full accent-emerald-400/80"
+        />
+        <div className="mt-0.5 flex justify-between text-white/40">
+          <span>{dbgVoice == null ? 'live (tts)' : `forced ${dbgVoice.toFixed(2)}`}</span>
+          <button
+            onClick={() => {
+              onTalk(false);
+              onVoice(null);
+            }}
+            className="underline hover:text-white/70"
+          >
+            live
+          </button>
+        </div>
       </div>
 
       <div className="space-y-1.5">
