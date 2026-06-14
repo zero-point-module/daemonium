@@ -1,15 +1,15 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Flame } from '@/components/Flame';
-import { IdentityBadge } from '@/components/IdentityBadge';
-import { StatusPill } from '@/components/StatusPill';
-import { MicButton } from '@/components/MicButton';
-import { QuickActions } from '@/components/QuickActions';
+import { ENSHeaderPill } from '@/components/ENSHeaderPill';
+import { ChatThread } from '@/components/ChatThread';
+import { LiquidSigil } from '@/components/LiquidSigil';
+import { IdentityPanel } from '@/components/IdentityPanel';
 import { ConfirmCard } from '@/components/ConfirmCard';
 import { Onboarding } from '@/components/Onboarding';
 import { STATE_META } from '@/lib/stateMeta';
-import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
+import { useDynamicContext } from '@dynamic-labs/sdk-react-core';
 
 import { useFlameDaemon } from './lib/useFlameDaemon';
 import { useTts } from './lib/useTts';
@@ -18,7 +18,6 @@ import { useSpeakOnNewLine } from './lib/useSpeakOnNewLine';
 import { useOnboarding } from './lib/useOnboarding';
 import { useProactiveWatch } from './lib/useProactiveWatch';
 import { explorerTx } from './lib/chain';
-
 
 export default function Home() {
   const d = useFlameDaemon();
@@ -30,21 +29,23 @@ export default function Home() {
   useSpeakOnNewLine(d.caption, d.busy, tts.speak);
 
   const shellRef = useRef<HTMLDivElement>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
   const signedIn = !!user;
 
   // First-run gate: does this user have a fully provisioned dæmon yet?
   const onb = useOnboarding(signedIn);
+  const ready = signedIn && onb.status === 'ready';
 
-  // The proactive moment: once provisioned, Ignis watches its wallet and speaks up on its own
-  // when funds arrive — held back while a turn, the mic, speech, or a proposal is in flight.
+  // Once provisioned, Ignis watches its wallet and speaks up on its own when funds
+  // arrive — held back while a turn, the mic, speech, or a proposal is in flight.
   useProactiveWatch({
-    enabled: signedIn && onb.status === 'ready',
+    enabled: ready,
     paused: d.busy || mic.recording || tts.isSpeaking || !!d.proposal,
     run: d.run,
   });
 
-  // The flame leads the onboarding: it "thinks" while the dæmon is being minted,
-  // and the real mic drives the `listening` overlay on an otherwise-idle flame.
+  // The flame leads onboarding (it "thinks" while minting); the real mic drives the
+  // `listening` overlay on an otherwise-idle flame.
   const flameState =
     onb.status === 'summoning'
       ? 'thinking'
@@ -58,13 +59,12 @@ export default function Home() {
     shellRef.current?.style.setProperty('--state', STATE_META[flameState].color);
   }, [flameState]);
 
-  // Every tap is a chance to arm the iOS AudioContext (must happen in a gesture).
-  const handleMic = useCallback(() => {
+  const handleTap = useCallback(() => {
     tts.unlock();
     mic.toggle();
   }, [tts.unlock, mic.toggle]);
 
-  const handlePick = useCallback(
+  const handleSubmit = useCallback(
     (text: string) => {
       tts.unlock();
       d.run(text);
@@ -77,71 +77,75 @@ export default function Home() {
     setShowAuthFlow(true);
   }, [tts.unlock, setShowAuthFlow]);
 
+  const showConfirmZone = !!d.proposal || !!d.txResult || !!mic.error;
+
   return (
     <main
       ref={shellRef}
-      className="relative mx-auto flex h-[100dvh] w-full max-w-md flex-col items-center overflow-hidden px-6 pt-[env(safe-area-inset-top)]"
-      style={{ transition: '--state 600ms ease' }}
+      className="relative mx-auto flex h-[100dvh] w-full max-w-[420px] flex-col items-center overflow-hidden pt-[env(safe-area-inset-top)]"
+      style={{
+        transition: '--state 600ms ease',
+        background:
+          'radial-gradient(94% 52% at 50% 18%, #100b07 0%, #060504 60%, #040303 100%)',
+      }}
     >
-      {/* ambient room glow the whole UI picks up, tinted by the state color */}
+      {/* ambient ember glow the whole room picks up, warmed by the state color */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 -z-20"
+        className="pointer-events-none absolute inset-0 z-0"
         style={{
           background:
-            'radial-gradient(120% 78% at 50% 20%, color-mix(in srgb, var(--state, #ff7a18) 13%, transparent), transparent 60%)',
+            'radial-gradient(110% 50% at 50% 16%, color-mix(in srgb, var(--state, #ff7a18) 15%, transparent), transparent 56%)',
         }}
       />
 
-      {/* upper third — flame, identity, status */}
-      <section className="flex flex-1 flex-col items-center justify-center gap-6">
-        <Flame state={flameState} getAmplitude={tts.getAmplitude} />
-        <div className="flex flex-col items-center gap-3">
-          <IdentityBadge ensName={onb.ensName} />
-          <StatusPill state={flameState} label={d.label} />
+      {/* ENS header — only once provisioned */}
+      {ready && onb.ensName ? (
+        <div className="mt-3 flex-none">
+          <ENSHeaderPill ensName={onb.ensName} onOpen={() => setPanelOpen(true)} />
         </div>
-      </section>
+      ) : null}
 
-      {/* middle — the confirm gate, else what Ignis says, plus tx + mic errors */}
-      <div className="flex w-full flex-col items-center gap-2 px-2">
-        {d.proposal ? (
-          <ConfirmCard
-            proposal={d.proposal}
-            busy={d.busy}
-            onConfirm={d.confirm}
-            onDismiss={d.dismissProposal}
-          />
-        ) : (
-          <div className="flex min-h-[2.75rem] items-center text-center">
-            {d.caption ? (
-              <p className="text-pretty text-[15px] leading-snug text-white/75">
-                {d.caption}
-              </p>
-            ) : null}
-          </div>
-        )}
-
-        {d.txResult ? <TxLine result={d.txResult} /> : null}
-        {mic.error ? (
-          <span className="text-[12px] text-red-400/80">{mic.error}</span>
-        ) : null}
+      {/* the flame — the protagonist, present in every state */}
+      <div className="relative z-[2] -mt-1 flex flex-none items-center justify-center">
+        <Flame state={flameState} getAmplitude={tts.getAmplitude} />
       </div>
 
-      {/* lower third — summon gate (logged out) → onboarding (no dæmon yet) →
-          mic + quick actions (provisioned) */}
-      <section className="flex w-full flex-col items-center gap-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
-        {!signedIn ? (
-          <SummonGate onSummon={handleSummon} />
-        ) : onb.status === 'ready' ? (
-          <>
-            <MicButton
-              open={mic.recording}
-              busy={d.busy || mic.transcribing}
-              onToggle={handleMic}
+      {/* the room between flame and control: the chat thread, or empty space */}
+      {ready ? <ChatThread messages={d.messages} /> : <div className="w-full flex-1" />}
+
+      {/* the human-confirm gate + last outcome + mic errors, just above the control */}
+      {showConfirmZone ? (
+        <div className="relative z-[2] flex w-full flex-none flex-col items-center gap-2 px-4 pb-2">
+          {d.proposal ? (
+            <ConfirmCard
+              proposal={d.proposal}
+              busy={d.busy}
+              onConfirm={d.confirm}
+              onDismiss={d.dismissProposal}
             />
-            <QuickActions busy={d.busy} onPick={handlePick} />
-          </>
-        ) : (
+          ) : null}
+          {d.txResult ? <TxLine result={d.txResult} /> : null}
+          {mic.error ? (
+            <span className="text-[12px] text-red-400/80">{mic.error}</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* the control: summon (logged out) → onboarding (no dæmon) → liquid sigil (ready) */}
+      {!signedIn ? (
+        <div className="flex w-full flex-none flex-col items-center px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-3">
+          <SummonGate onSummon={handleSummon} />
+        </div>
+      ) : ready ? (
+        <LiquidSigil
+          listening={mic.recording}
+          busy={d.busy || mic.transcribing}
+          onTap={handleTap}
+          onSubmit={handleSubmit}
+        />
+      ) : (
+        <div className="flex w-full flex-none flex-col items-center px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-3">
           <Onboarding
             status={onb.status}
             error={onb.error}
@@ -153,8 +157,13 @@ export default function Home() {
             }}
             onRetry={onb.retry}
           />
-        )}
-      </section>
+        </div>
+      )}
+
+      {/* identity / cluster sheet */}
+      {panelOpen && onb.ensName ? (
+        <IdentityPanel ensName={onb.ensName} onClose={() => setPanelOpen(false)} />
+      ) : null}
     </main>
   );
 }

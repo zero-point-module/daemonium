@@ -13,13 +13,18 @@
 import { useDaemon } from './daemon-client';
 import type { DaemonState, ProposalCard, ExecuteResponse } from './types';
 
+export interface ChatMessage {
+  role: 'user' | 'ignis';
+  text: string;
+}
+
 export interface FlameDaemon {
   /** Live flame state from the agent. */
   state: DaemonState;
-  /** Custom status label; null lets StatusPill fall back to STATE_META copy. */
-  label: string | null;
   /** Ignis's latest line — the assistant's streaming text (graceful text path). */
   caption: string | null;
+  /** The conversation thread for the chat view (user + Ignis lines; internal turns filtered). */
+  messages: ChatMessage[];
   /** A turn is in flight (chips/mic disabled). */
   busy: boolean;
   /** Send an utterance to the live agent (/api/agent). */
@@ -48,6 +53,27 @@ function lastSpokenLine(
   return text || null;
 }
 
+/** Internal directive turns we inject (proactive nudges, post-confirm reactions) — kept out of the chat. */
+const INTERNAL_USER_PREFIXES = ['[ambient]', 'Confirmed.', 'I confirmed,'];
+
+/** Flatten the ai-sdk messages into the chat thread, dropping empty + internal-directive turns. */
+function toThread(
+  messages: Array<{ role: string; parts: Array<{ type: string; text?: string }> }>,
+): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const m of messages) {
+    const text = m.parts
+      .filter((p) => p.type === 'text')
+      .map((p) => p.text ?? '')
+      .join('')
+      .trim();
+    if (!text) continue;
+    if (m.role === 'user' && INTERNAL_USER_PREFIXES.some((p) => text.startsWith(p))) continue;
+    out.push({ role: m.role === 'user' ? 'user' : 'ignis', text });
+  }
+  return out;
+}
+
 export function useFlameDaemon(): FlameDaemon {
   const {
     messages,
@@ -62,11 +88,12 @@ export function useFlameDaemon(): FlameDaemon {
 
   const busy = status === 'submitted' || status === 'streaming';
   const caption = lastSpokenLine(messages);
+  const thread = toThread(messages);
 
   return {
     state,
-    label: null,
     caption,
+    messages: thread,
     busy,
     run: sendPrompt,
     proposal,
