@@ -9,7 +9,7 @@
  */
 import "server-only";
 import { type Address } from "viem";
-import { agentCardUri, ENS_PARENT_NAME } from "./chain";
+import { agentCardUri, ENS_PARENT_NAME, ENS_ONCHAIN_MINTING } from "./chain";
 import { ensureAgentWallet } from "./dynamic-server";
 import { ensureMinter, seedGasIfLow, MINTER_KEY } from "./minter";
 import { registerSubname, setAgentCardRecord, subnameExists, canManageParent } from "./ens";
@@ -58,30 +58,33 @@ async function provisionInner(handle: string): Promise<ProvisionResult> {
     if (agentId) await updateWallet(ensName, { agentId, agentCardUri: uri });
   }
 
-  // 4. ENS subname cluster — BEST EFFORT. It needs a parent the minter controls; if the parent
-  //    isn't set up yet (Sepolia ENS registrar is in flux), we DEFER it instead of failing, so
-  //    the dæmon is fully usable (wallet + funds + 8004) without it.
+  // 4. ENS subname cluster. On Sepolia this is OFF (ENS_ONCHAIN_MINTING=false): v1 NameWrapper is
+  //    frozen and v2 subname-issuance contracts aren't published, so the ENS name is a label and
+  //    the real on-chain identity is the ERC-8004 NFT above. The v1 minting path is kept behind
+  //    the flag for a v1-live network. Best-effort + decoupled either way — never blocks the dæmon.
   let ensRegistered = false;
-  try {
-    ensRegistered = await subnameExists(ensName);
-  } catch {
-    ensRegistered = false;
-  }
-  if (!ensRegistered) {
+  if (ENS_ONCHAIN_MINTING) {
     try {
-      const minterAddr = (await ensureMinter()).address as Address;
-      if (await canManageParent(ENS_PARENT_NAME, minterAddr)) {
-        if (!(await subnameExists(userRoot))) {
-          await registerSubname({ parentName: ENS_PARENT_NAME, label: handle, owner: minterAddr, signerLabel: MINTER_KEY });
-        }
-        if (!(await subnameExists(ensName))) {
-          await registerSubname({ parentName: userRoot, label: "ignis", owner, signerLabel: MINTER_KEY });
-        }
-        await setAgentCardRecord({ name: ensName, uri, signerLabel: ensName });
-        ensRegistered = true;
-      }
+      ensRegistered = await subnameExists(ensName);
     } catch {
-      ensRegistered = false; // ENS deferred — the dæmon still works without it
+      ensRegistered = false;
+    }
+    if (!ensRegistered) {
+      try {
+        const minterAddr = (await ensureMinter()).address as Address;
+        if (await canManageParent(ENS_PARENT_NAME, minterAddr)) {
+          if (!(await subnameExists(userRoot))) {
+            await registerSubname({ parentName: ENS_PARENT_NAME, label: handle, owner: minterAddr, signerLabel: MINTER_KEY });
+          }
+          if (!(await subnameExists(ensName))) {
+            await registerSubname({ parentName: userRoot, label: "ignis", owner, signerLabel: MINTER_KEY });
+          }
+          await setAgentCardRecord({ name: ensName, uri, signerLabel: ensName });
+          ensRegistered = true;
+        }
+      } catch {
+        ensRegistered = false; // ENS deferred — the dæmon still works without it
+      }
     }
   }
 

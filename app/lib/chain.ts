@@ -5,7 +5,7 @@
  * (ENS docs + GitHub deployments + Etherscan; Circle docs; the erc-8004 repo).
  * Keep this file as the single source of truth — do not inline addresses elsewhere.
  */
-import { sepolia } from "viem/chains";
+import { sepolia, baseSepolia } from "viem/chains";
 import type { Address } from "viem";
 
 export const CHAIN = sepolia;
@@ -21,12 +21,26 @@ export const USDC: { address: Address; decimals: number } = {
   decimals: 6,
 };
 
-/** ENS deployments on Sepolia — verified across 3 sources (ENS docs, GH, Etherscan). */
+/** ENS v1 deployments on Sepolia (NameWrapper et al). NOTE: Sepolia migrated to ENS v2 — the
+ * v1 NameWrapper is frozen for new registrations, so on-chain subname minting via this path is
+ * dead on Sepolia. Kept for reference / a v1-live network. See ENS_ONCHAIN_MINTING below. */
 export const ENS = {
   registry: "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e" as Address,
   nameWrapper: "0x0635513f179D50A207757E05759CbD106d7dFcE8" as Address,
   publicResolver: "0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5" as Address,
 };
+
+/** ENS v2 .eth PermissionedRegistry on Sepolia — where `daemonium.eth` is actually REGISTERED. */
+export const ENS_V2_ETH_REGISTRY = "0xDEDB92913A25abE1f7BCDD85D8A344a43B398B67" as Address;
+
+/**
+ * Whether to attempt ON-CHAIN ENS subname minting during provisioning. FALSE on Sepolia:
+ * v1 NameWrapper is frozen and v2 subname-issuance contracts (VerifiableFactory / UserRegistry
+ * impl / writable resolver) are not published on Sepolia yet. So agent ENS names are a
+ * human-readable LABEL layer; the real on-chain identity is the ERC-8004 NFT + the wallet.
+ * Flip to true only on a network where v1 NameWrapper (or a complete v2 path) is live.
+ */
+export const ENS_ONCHAIN_MINTING = process.env.ENS_ONCHAIN_MINTING === "true";
 
 /**
  * ERC-8004 "Trustless Agents" registries on Sepolia.
@@ -48,6 +62,29 @@ export const ENS_PARENT_NAME = process.env.ENS_PARENT_NAME ?? "daemonium.eth";
 
 /** Per-transaction USDC spending cap enforced in the executor (defense in depth). */
 export const USDC_SEND_CAP = 100; // in whole USDC
+/** Per-transaction native ETH spending cap (defense in depth). */
+export const ETH_SEND_CAP = 1; // in ETH
+
+/**
+ * Dynamic Swap config. The Swap API is NOT mainnet-only as the docs claim — verified that
+ * Base Sepolia (84532) IS supported (Ethereum Sepolia is genuinely not). So the agent's swaps
+ * run on Base Sepolia via the real Dynamic Swap API; the same MPC server-wallet address signs
+ * there. The only routable testnet pair via the aggregator is WETH<->ETH (USDC pairs 404 on
+ * testnet) — richer pairs work on any supported chain.
+ */
+export const SWAP_API_BASE = "https://app.dynamicauth.com/api/v0";
+export const SWAP_CHAIN = baseSepolia;
+export const SWAP_CHAIN_ID = baseSepolia.id; // 84532
+export const SWAP_CHAIN_NAME = "EVM"; // Dynamic's chainName for EVM
+export const BASE_SEPOLIA_RPC_URL =
+  process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org";
+/** Tokens the agent can name in a swap on the swap chain (Base Sepolia). */
+export const SWAP_TOKENS: Record<string, { address: Address; decimals: number }> = {
+  ETH: { address: "0x0000000000000000000000000000000000000000", decimals: 18 },
+  WETH: { address: "0x4200000000000000000000000000000000000006", decimals: 18 },
+};
+/** Notional USD cap per swap (defense in depth), read from the quote's amountUSD. */
+export const SWAP_CAP_USD = 50;
 
 /** Claude model (via Vercel AI Gateway) used by Ignis and its sub-agents. */
 export const AGENT_MODEL = "anthropic/claude-sonnet-4.6";
