@@ -33,7 +33,7 @@ yarn-error.log*
 .env
 .env*.local
 
-# daemon wallet store — holds MPC key shares; NEVER commit
+# daemon store — non-sensitive wallet/handle index (metadata only, no key material); for local dev
 /.daemon/
 
 # vercel

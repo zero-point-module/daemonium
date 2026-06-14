@@ -144,9 +144,7 @@ export const AGENT_CARD_TEXT_KEY = "agent-card";
 
 /* Explorers. Identity (ENS/ERC-8004/wallet) on Ethereum L1 → etherscan; value (sends/swaps/LI.FI)
  * on Base → basescan. */
-export const explorerTx = (hash: string) => `https://etherscan.io/tx/${hash}`;
 export const explorerAddress = (addr: string) => `https://etherscan.io/address/${addr}`;
-export const defiExplorerTx = (hash: string) => `https://basescan.org/tx/${hash}`;
 export const defiExplorerAddress = (addr: string) => `https://basescan.org/address/${addr}`;
 
 /**

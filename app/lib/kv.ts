@@ -85,15 +85,3 @@ export async function kvSet(ns: string, field: string, value: unknown): Promise<
     await writeFileNs(ns, data);
   });
 }
-
-export async function kvDel(ns: string, field: string): Promise<void> {
-  if (useRedis) {
-    await redis().hdel(redisKey(ns), field);
-    return;
-  }
-  await withLock(`kv:${ns}`, async () => {
-    const data = await readFileNs(ns);
-    delete data[field];
-    await writeFileNs(ns, data);
-  });
-}

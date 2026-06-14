@@ -10,7 +10,7 @@
  * JSON file for local dev. No JSON file is required to deploy.
  */
 import "server-only";
-import { kvGet, kvGetAll, kvSet, kvDel } from "./kv";
+import { kvGet, kvSet } from "./kv";
 import { withLock } from "./lock";
 
 const NS = "wallets";
@@ -30,23 +30,9 @@ export function getWallet(label: string): Promise<StoredWallet | undefined> {
   return kvGet<StoredWallet>(NS, label);
 }
 
-export async function getWalletByAddress(address: string): Promise<StoredWallet | undefined> {
-  const all = await kvGetAll<StoredWallet>(NS);
-  const lower = address.toLowerCase();
-  return Object.values(all).find((w) => w.address.toLowerCase() === lower);
-}
-
-export async function listWallets(): Promise<StoredWallet[]> {
-  return Object.values(await kvGetAll<StoredWallet>(NS));
-}
-
 export function putWallet(w: StoredWallet): Promise<void> {
   // Per-field set is atomic (Redis HSET; the file backend locks the namespace internally).
   return kvSet(NS, w.label, w);
-}
-
-export function deleteWallet(label: string): Promise<void> {
-  return kvDel(NS, label);
 }
 
 export function updateWallet(label: string, patch: Partial<StoredWallet>): Promise<StoredWallet> {
