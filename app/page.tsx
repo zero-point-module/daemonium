@@ -93,6 +93,12 @@ export default function Home() {
     mic.start,
   ]);
 
+  // Leaving the ready state ends any hands-free conversation so it can't silently auto-reopen the
+  // mic on a later re-entry.
+  useEffect(() => {
+    if (!ready) setConversing(false);
+  }, [ready]);
+
   // The flame leads onboarding (it "thinks" while minting); the real mic drives the
   // `listening` overlay on an otherwise-idle flame.
   const flameState =
@@ -138,8 +144,10 @@ export default function Home() {
       return;
     }
     if (voice.isSpeaking) {
-      // Cut Ignis off and keep the conversation going — the mic reopens once it's silent.
+      // Cut Ignis off and keep the conversation going — stop the audio AND abort the reply so the
+      // mic can reopen now instead of after the model finishes. The reopen effect handles the rest.
       voice.interrupt();
+      d.stop();
       return;
     }
     // Otherwise a tap ends the conversation.
@@ -149,6 +157,7 @@ export default function Home() {
   const endConversation = () => {
     setConversing(false);
     voice.interrupt(); // silence any audio + suppress an in-flight reply
+    d.stop(); // abort an in-flight agent turn
     mic.cancel(); // stop + discard an open capture
   };
 

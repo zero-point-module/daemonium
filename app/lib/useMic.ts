@@ -68,6 +68,7 @@ function extensionFor(mimeType: string): string {
 const VAD_SAMPLE_MS = 50; // how often we measure the input level
 const VAD_RMS_THRESHOLD = 0.025; // above this = "voice", below = "silence"
 const VAD_ONSET_TICKS = 2; // consecutive voiced samples before it counts as speech (filters clicks)
+const VAD_MIN_SPEECH_MS = 250; // a turn needs at least this much real voice — filters coughs/bumps
 const VAD_HANGOVER_MS = 800; // trailing silence after speech that ends the turn
 const VAD_NO_SPEECH_MS = 10000; // mic opened but heard nothing at all -> give up (onNoSpeech)
 const VAD_MAX_MS = 20000; // hard cap on a single utterance
@@ -214,6 +215,7 @@ export function useMic({
       const startedAt = Date.now();
       let lastVoiceAt = startedAt;
       let voicedTicks = 0;
+      let voicedMs = 0; // cumulative voiced time this utterance — gates real speech vs a blip
       let speechStarted = false;
 
       vadTimerRef.current = setInterval(() => {
@@ -230,6 +232,7 @@ export function useMic({
 
         if (rms > VAD_RMS_THRESHOLD) {
           voicedTicks++;
+          voicedMs += VAD_SAMPLE_MS;
           lastVoiceAt = now;
           if (!speechStarted && voicedTicks >= VAD_ONSET_TICKS) speechStarted = true;
         } else {
@@ -245,10 +248,17 @@ export function useMic({
           }
           return;
         }
-        // Speech happened: end the turn on a trailing silence, or at the hard cap.
-        if (now - lastVoiceAt > VAD_HANGOVER_MS || now - startedAt > VAD_MAX_MS) {
-          recorder.stop(); // onstop uploads
+        if (now - lastVoiceAt > VAD_HANGOVER_MS) {
+          if (voicedMs >= VAD_MIN_SPEECH_MS) {
+            recorder.stop(); // real speech + trailing silence -> end the turn (onstop uploads)
+          } else {
+            // Too little real voice to be a turn (a cough/bump) — keep listening, don't upload.
+            speechStarted = false;
+            voicedMs = 0;
+          }
+          return;
         }
+        if (now - startedAt > VAD_MAX_MS) recorder.stop(); // hard cap -> upload what we have
       }, VAD_SAMPLE_MS);
     },
     [ensureVadContext],
@@ -308,7 +318,16 @@ export function useMic({
     // getUserMedia is async but is still inside the tap's task on iOS, which is what
     // the permission/gesture requirement needs.
     navigator.mediaDevices
-      .getUserMedia({ audio: true })
+      // Ask for the browser's voice processing: echo cancellation keeps the reopened mic from
+      // hearing Ignis's own tail (half-duplex barge-in), and noise suppression steadies the noise
+      // floor so the fixed VAD threshold behaves more consistently across devices.
+      .getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
       .then((stream) => {
         // If stop() was called while we were awaiting permission, bail cleanly.
         if (!startingRef.current) {
