@@ -1,53 +1,55 @@
 "use client";
 
 /**
- * Ignis's voice — and the caption that appears *in lockstep with it*.
+ * Ignis's voice — and the caption that appears *in lockstep with it*, word by word.
  *
- * The problem this solves: the agent streams its line token-by-token, but speech used to wait
- * for the WHOLE turn to finish, then synthesize the whole paragraph, then play. Measured, that
- * left the voice starting 4–12s after you stopped talking, with the text already fully on
- * screen for seconds. Two fixes, both here:
+ * The agent streams its line token-by-token. We segment it into sentences as they complete and
+ * synthesize each the moment it's ready (pipeline: while sentence N plays, N+1… are already being
+ * fetched). Each /api/tts call returns the mp3 PLUS per-word timings (ElevenLabs with-timestamps),
+ * so while a sentence plays we reveal its words exactly as they're pronounced — driven by the
+ * audio clock, not a guess. The caption fills in word-by-word in time with the voice.
  *
- *  1. PIPELINE. We segment the streaming text into sentences as they complete and synthesize
- *     each one the moment it's ready (TTS has a ~1s floor but is otherwise flat for short
- *     clips, so the first sentence speaks ~1.5s sooner than the full paragraph would). While
- *     sentence N plays, N+1… are already being fetched, so the line flows without gaps.
- *  2. SYNC. The on-screen caption is NOT the raw stream — it is revealed one sentence at a
- *     time, exactly when that sentence's audio begins. Text appears as Ignis says it.
+ * Pipeline per sentence: POST /api/tts -> { audio (base64 mp3), words } -> decodeAudioData ->
+ * AudioBufferSourceNode -> AnalyserNode -> destination. The analyser feeds getAmplitude() for the
+ * flame's lip-sync; a rAF loop compares the source's elapsed time to each word's start time and
+ * reveals words as they pass — re-rendering only when a new word crosses, not every frame.
  *
- * Pipeline per sentence: POST /api/tts -> mp3 -> decodeAudioData -> AudioBufferSourceNode ->
- * AnalyserNode -> destination. The analyser feeds getAmplitude() for the flame's lip-sync.
+ * Graceful degradation: if Web Audio is unavailable, a /api/tts call fails, or alignment is
+ * missing, the sentence is still revealed (whole, paced) so the caption never stalls.
  *
- * Graceful degradation: if Web Audio is unavailable or a /api/tts call fails, the sentence is
- * still revealed (paced to a readable speed) so the caption never stalls — the demo survives a
- * dead mic or a missing key, just silently.
- *
- * React-best-practices: caption + isSpeaking are UI state; everything transient (audio nodes,
- * the play queue, segmentation cursor) lives in refs so the flame never re-renders from them.
- * The only effect trigger is the (text, busy) pair; all callbacks are stable.
+ * React-best-practices: caption + isSpeaking are UI state; everything transient (audio nodes, the
+ * play queue, segmentation cursor, reveal loop) lives in refs so the flame never re-renders from
+ * them. The only effect trigger is the (text, busy) pair; all callbacks are stable.
  *
  * iOS Safari: AudioContext only starts inside a user gesture — call unlock() from a tap
  * (Summon / mic / quick-action / claim) to arm it for the session.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAuthToken } from "@dynamic-labs/sdk-react-core";
+import type { TtsResponse, TtsWord } from "./voice";
 
-/** One spoken unit: a sentence, its cumulative caption, and its (prefetched) decoded audio. */
+/** Decoded audio + the per-word timings used to reveal this sentence in sync. */
+interface Spoken {
+  buffer: AudioBuffer | null;
+  words: TtsWord[];
+}
+
+/** One spoken unit: the sentence, the caption already shown before it, and its prefetched audio. */
 interface QueueItem {
-  /** Cumulative text to show when this unit starts (the line built up through this sentence). */
-  display: string;
-  /** Length of just this sentence, for pacing the silent fallback. */
-  len: number;
+  /** This sentence's text — revealed word-by-word as its clip plays. */
+  sentence: string;
+  /** Caption already on screen before this sentence (prior sentences, trimmed). */
+  prefix: string;
   /** The turn this belongs to; a reset bumps the turn token and stale items are dropped. */
   turn: number;
-  /** Decoded audio, or null if synthesis failed / Web Audio is unavailable. */
-  audio: Promise<AudioBuffer | null>;
+  /** Decoded audio + word timings, or null if synthesis failed / Web Audio is unavailable. */
+  audio: Promise<Spoken | null>;
   /** Aborts the in-flight /api/tts fetch on reset/interrupt. */
   controller: AbortController;
 }
 
 export interface UseVoice {
-  /** The caption to render — revealed sentence-by-sentence, synced to playback. */
+  /** The caption to render — revealed word-by-word, synced to playback. */
   caption: string;
   /** True while audio is actively playing (half-duplex hint for the mic). */
   isSpeaking: boolean;
@@ -55,6 +57,9 @@ export interface UseVoice {
   getAmplitude: () => number;
   /** Arm/resume the AudioContext from inside a user gesture (required on iOS Safari). */
   unlock: () => void;
+  /** Cut Ignis off NOW: stop playback and drop the queue, and stay silent for the rest of this
+   *  turn (the caption freezes at the words reached). Used for tap-to-interrupt / ending. */
+  interrupt: () => void;
 }
 
 /** Lazily create the shared AudioContext (one per page is plenty). */
@@ -65,6 +70,14 @@ function makeContext(): AudioContext | null {
     (window as unknown as { webkitAudioContext?: typeof AudioContext })
       .webkitAudioContext;
   return Ctor ? new Ctor() : null;
+}
+
+/** Decode a base64 mp3 (delivered alongside its word timings) into bytes for decodeAudioData. */
+function base64ToBytes(b64: string): ArrayBuffer {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
 }
 
 /**
@@ -109,11 +122,16 @@ export function useVoice({
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
   // Scratch buffer reused across amplitude reads to avoid per-frame allocation.
   const ampBufRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  // The running word-reveal animation frame (one at a time), so we can cancel it on interrupt.
+  const revealRafRef = useRef<number | null>(null);
 
   // Play queue + turn bookkeeping.
   const queueRef = useRef<QueueItem[]>([]);
   const playingRef = useRef(false);
   const turnRef = useRef(0);
+  // Set by interrupt(): suppresses any remaining speech for the current turn until the next turn
+  // begins (the busy rising edge clears it).
+  const interruptedRef = useRef(false);
   // resolve() of the play promise currently awaiting a source — called on interrupt so the
   // playLoop unwinds instead of hanging forever (which would pin its AudioBuffer).
   const resolveCurrentRef = useRef<(() => void) | null>(null);
@@ -150,8 +168,12 @@ export function useVoice({
     ensureContext();
   }, [ensureContext]);
 
-  /** Tear down the current source node (without closing the shared context). */
+  /** Tear down the current source node + reveal loop (without closing the shared context). */
   const stopSource = useCallback(() => {
+    if (revealRafRef.current != null) {
+      cancelAnimationFrame(revealRafRef.current);
+      revealRafRef.current = null;
+    }
     const src = sourceRef.current;
     if (src) {
       src.onended = null;
@@ -174,9 +196,9 @@ export function useVoice({
     resolve?.();
   }, []);
 
-  /** Synthesize one sentence to a decoded buffer. Null on any failure (caller falls back). */
+  /** Synthesize one sentence to a decoded buffer + word timings. Null on any failure. */
   const synthesize = useCallback(
-    async (sentence: string, signal: AbortSignal): Promise<AudioBuffer | null> => {
+    async (sentence: string, signal: AbortSignal): Promise<Spoken | null> => {
       const ctx = ensureContext();
       if (!ctx || !analyserRef.current) return null;
       try {
@@ -191,79 +213,123 @@ export function useVoice({
           signal,
         });
         if (!res.ok) return null;
-        const encoded = await res.arrayBuffer();
+        const data = (await res.json()) as TtsResponse;
         if (signal.aborted) return null;
-        return await ctx.decodeAudioData(encoded);
+        const buffer = await ctx.decodeAudioData(base64ToBytes(data.audio));
+        return { buffer, words: data.words ?? [] };
       } catch {
-        return null; // aborted, network, or decode error — degrade to a silent reveal
+        return null; // aborted, network, or decode error — degrade to a paced reveal
       }
     },
     [ensureContext],
   );
 
-  /** Play one decoded buffer; resolves when it ends. */
-  const playBuffer = useCallback((buffer: AudioBuffer): Promise<void> => {
-    return new Promise((resolve) => {
-      const ctx = ctxRef.current;
-      const analyser = analyserRef.current;
-      if (!ctx || !analyser) {
-        resolve();
-        return;
-      }
-      const src = ctx.createBufferSource();
-      src.buffer = buffer;
-      src.connect(analyser);
-      sourceRef.current = src;
-      resolveCurrentRef.current = resolve;
-      src.onended = () => {
-        if (sourceRef.current === src) sourceRef.current = null;
-        if (resolveCurrentRef.current === resolve) resolveCurrentRef.current = null;
-        resolve();
-      };
-      setIsSpeaking(true);
-      src.start();
-    });
-  }, []);
+  /**
+   * Play one sentence's buffer and reveal its words in time with the audio. `sep` is the caption
+   * already on screen (prior sentences) plus a separating space; we append revealed words to it.
+   * Resolves when the clip ends.
+   */
+  const playAndReveal = useCallback(
+    (buffer: AudioBuffer, words: TtsWord[], sep: string, sentence: string): Promise<void> => {
+      return new Promise((resolve) => {
+        const ctx = ctxRef.current;
+        const analyser = analyserRef.current;
+        if (!ctx || !analyser) {
+          setCaption(sep + sentence);
+          resolve();
+          return;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(analyser);
+        sourceRef.current = src;
+        resolveCurrentRef.current = resolve;
 
-  /** Drain the queue in order, revealing each caption exactly as its audio begins. */
+        src.onended = () => {
+          if (revealRafRef.current != null) {
+            cancelAnimationFrame(revealRafRef.current);
+            revealRafRef.current = null;
+          }
+          if (sourceRef.current === src) sourceRef.current = null;
+          if (resolveCurrentRef.current === resolve) resolveCurrentRef.current = null;
+          setCaption(sep + sentence); // land on the exact full text at the end
+          resolve();
+        };
+
+        src.start();
+
+        if (words.length === 0) {
+          // No timings — reveal the whole sentence as the clip starts (still voice-synced).
+          setCaption(sep + sentence);
+        } else {
+          // Reveal words as the audio clock passes each one's start time; re-render only when a
+          // new word crosses, so this is a handful of updates/sec, not 60.
+          const startedAt = ctx.currentTime;
+          // Reveal against when the audio is actually HEARD, not when it's processed: outputLatency
+          // is tiny on built-in/wired output but ~150-300ms on Bluetooth, where the text would
+          // otherwise lead the voice. (Undefined on some Safari builds -> 0, i.e. today's behavior.)
+          const outputLatency = ctx.outputLatency || 0;
+          let shown = -1;
+          const tick = () => {
+            if (sourceRef.current !== src) return; // superseded / stopped
+            const elapsed = ctx.currentTime - startedAt - outputLatency;
+            let count = 0;
+            while (count < words.length && words[count].start <= elapsed) count++;
+            if (count !== shown) {
+              shown = count;
+              setCaption(sep + words.slice(0, count).map((w) => w.text).join(""));
+            }
+            revealRafRef.current = requestAnimationFrame(tick);
+          };
+          revealRafRef.current = requestAnimationFrame(tick);
+        }
+      });
+    },
+    [],
+  );
+
+  /** Drain the queue in order, revealing each sentence's words as its audio plays. */
   const playLoop = useCallback(async () => {
     if (playingRef.current) return;
     playingRef.current = true;
+    setIsSpeaking(true);
     const myTurn = turnRef.current;
     while (queueRef.current.length) {
       const item = queueRef.current.shift();
       if (!item) break;
-      let buffer: AudioBuffer | null = null;
+      let data: Spoken | null = null;
       try {
-        buffer = await item.audio;
+        data = await item.audio;
       } catch {
-        buffer = null;
+        data = null;
       }
       // A reset (new turn / interrupt) superseded us — exit WITHOUT touching playingRef, which
       // the newer playLoop now owns (a `continue` would race it draining the same queue).
       if (turnRef.current !== myTurn) return;
 
-      setCaption(item.display); // reveal in sync with the voice
-      if (buffer) {
-        await playBuffer(buffer);
+      const sep = item.prefix ? item.prefix + " " : "";
+      if (data?.buffer) {
+        await playAndReveal(data.buffer, data.words, sep, item.sentence);
       } else {
-        // Silent fallback: pace the reveal so the text doesn't flash all at once.
-        const wait = Math.min(3500, Math.max(650, item.len * 38));
+        // Silent fallback: reveal the whole sentence, paced so it doesn't flash past.
+        setCaption(sep + item.sentence);
+        const wait = Math.min(3500, Math.max(650, item.sentence.length * 38));
         await new Promise((r) => setTimeout(r, wait));
       }
       if (turnRef.current !== myTurn) return; // interrupted during playback/wait
     }
     playingRef.current = false;
     setIsSpeaking(false);
-  }, [playBuffer]);
+  }, [playAndReveal]);
 
-  /** Queue a sentence: start its synthesis immediately (prefetch) and kick the player. */
+  /** Queue a sentence: start its synthesis immediately (prefetch) and kick the player. `prefix`
+   *  is the caption shown for everything before this sentence. */
   const enqueue = useCallback(
-    (sentence: string, display: string) => {
+    (sentence: string, prefix: string) => {
       const controller = new AbortController();
       const item: QueueItem = {
-        display,
-        len: sentence.length,
+        sentence,
+        prefix,
         turn: turnRef.current,
         audio: synthesize(sentence, controller.signal),
         controller,
@@ -287,14 +353,34 @@ export function useVoice({
     setCaption("");
   }, [stopSource]);
 
+  /** Tap-to-interrupt: silence Ignis at once and stop speaking the rest of this turn. Unlike
+   *  reset(), the caption is LEFT as-is (the words reached) and the cursor isn't rewound — we just
+   *  stop; interruptedRef keeps the segmentation effect from enqueuing anything more until the
+   *  next turn begins. */
+  const interrupt = useCallback(() => {
+    interruptedRef.current = true;
+    turnRef.current += 1; // supersede any in-flight playLoop
+    for (const it of queueRef.current) it.controller.abort();
+    queueRef.current = [];
+    stopSource();
+    playingRef.current = false;
+    setIsSpeaking(false);
+  }, [stopSource]);
+
   // Segment the streaming text into sentences and feed the voice. The sole trigger is the
   // (text, busy) pair; everything it touches is a ref or a stable callback.
   useEffect(() => {
     const wasBusy = prevBusyRef.current;
     prevBusyRef.current = busy;
 
-    // A rising busy edge means a fresh turn is starting — wipe the previous line.
-    if (busy && !wasBusy) reset();
+    // A rising busy edge means a fresh turn is starting — wipe the previous line and clear any
+    // interrupt latched on the turn that just ended.
+    if (busy && !wasBusy) {
+      interruptedRef.current = false;
+      reset();
+    }
+    // After an interrupt, stay silent for the rest of this turn (cleared on the next turn above).
+    if (interruptedRef.current) return;
 
     const full = text ?? "";
     // If the text isn't an extension of what we had, realign the cursor (turn boundary).
@@ -303,16 +389,19 @@ export function useVoice({
     if (!full) return;
 
     // While streaming we only cut on punctuation followed by whitespace; at turn end we
-    // also accept end-of-string and then flush whatever tail remains.
+    // also accept end-of-string and then flush whatever tail remains. Each sentence carries the
+    // caption shown BEFORE it (prefix) so playback can append its words to the prior line.
     for (const end of sentenceEnds(full, cursorRef.current, busy)) {
-      const sentence = full.slice(cursorRef.current, end).trim();
+      const startCursor = cursorRef.current;
+      const sentence = full.slice(startCursor, end).trim();
       cursorRef.current = end;
-      if (sentence) enqueue(sentence, full.slice(0, end).trim());
+      if (sentence) enqueue(sentence, full.slice(0, startCursor).trim());
     }
     if (!busy) {
-      const tail = full.slice(cursorRef.current).trim();
+      const startCursor = cursorRef.current;
+      const tail = full.slice(startCursor).trim();
       if (tail) {
-        enqueue(tail, full.trim());
+        enqueue(tail, full.slice(0, startCursor).trim());
         cursorRef.current = full.length;
       }
     }
@@ -332,7 +421,7 @@ export function useVoice({
     return Math.min(1, rms * 2.2);
   }, []);
 
-  // Tear down on unmount: abort fetches, stop playback, close the context.
+  // Tear down on unmount: abort fetches, stop playback + reveal loop, close the context.
   useEffect(() => {
     return () => {
       for (const it of queueRef.current) it.controller.abort();
@@ -344,5 +433,5 @@ export function useVoice({
     };
   }, [stopSource]);
 
-  return { caption, isSpeaking, getAmplitude, unlock };
+  return { caption, isSpeaking, getAmplitude, unlock, interrupt };
 }

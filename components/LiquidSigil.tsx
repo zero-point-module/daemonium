@@ -18,6 +18,8 @@ const HOLD_MS = 320;
 export function LiquidSigil({
   listening,
   busy = false,
+  conversing = false,
+  speaking = false,
   onTap,
   onSubmit,
 }: {
@@ -25,6 +27,10 @@ export function LiquidSigil({
   listening: boolean;
   /** A turn is in flight: block starting a new voice capture (typing still allowed). */
   busy?: boolean;
+  /** In a hands-free conversation — a tap now ends it (or interrupts Ignis). Drives the hint. */
+  conversing?: boolean;
+  /** Ignis is speaking — a tap interrupts. Drives the hint. */
+  speaking?: boolean;
   /** Quick tap in voice mode — start/stop listening. */
   onTap: () => void;
   /** Submit a typed line to the agent. */
@@ -85,9 +91,11 @@ export function LiquidSigil({
       suppressClick.current = false;
       return;
     }
+    // In a conversation a tap always reaches the page (to interrupt / end), even mid-turn;
+    // otherwise block starting a fresh capture while a turn is in flight.
     if (inputMode) exitInput();
-    else if (!busy) onTap();
-  }, [inputMode, busy, exitInput, onTap]);
+    else if (conversing || !busy) onTap();
+  }, [inputMode, busy, conversing, exitInput, onTap]);
 
   const submit = useCallback(() => {
     const text = draft.trim();
@@ -96,13 +104,19 @@ export function LiquidSigil({
     setDraft('');
   }, [draft, onSubmit]);
 
-  const label = listening
-    ? 'Listening…'
-    : inputMode
-      ? ''
-      : busy
-        ? 'Thinking…'
-        : 'Tap to speak · hold to type';
+  const label = inputMode
+    ? ''
+    : listening
+      ? conversing
+        ? 'Listening… · tap to end'
+        : 'Listening…'
+      : speaking
+        ? 'Speaking… · tap to interrupt'
+        : busy
+          ? 'Thinking…'
+          : conversing
+            ? 'Tap to end'
+            : 'Tap to speak · hold to type';
 
   return (
     <div className="relative z-[2] flex flex-none flex-col items-center gap-3.5 px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-2.5">

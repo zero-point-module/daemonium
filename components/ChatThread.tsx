@@ -5,7 +5,7 @@
  * (it holds the flex space that pins the control to the bottom); message bubbles dissolve
  * up into the flame via a top fade mask, and the view sticks to the newest line.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '@/app/lib/useFlameDaemon';
 
 export function ChatThread({ messages }: { messages: ChatMessage[] }) {
@@ -59,11 +59,48 @@ export function ChatThread({ messages }: { messages: ChatMessage[] }) {
                 color: ignis ? 'rgba(246,236,221,.9)' : '#ffe9d2',
               }}
             >
-              {m.text}
+              <SpokenText text={m.text} />
             </div>
           </div>
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Renders a bubble's text so that as the line grows sentence-by-sentence — in lockstep with
+ * Ignis's voice (the synced caption) — each newly revealed piece FADES in instead of popping.
+ * The first piece doesn't fade: the bubble's own entrance (msg-in) already covers it; only the
+ * appended deltas animate. Forward-compatible with the user's own streamed transcript later.
+ */
+function SpokenText({ text }: { text: string }) {
+  const [chunks, setChunks] = useState<{ text: string; fade: boolean }[]>(() =>
+    text ? [{ text, fade: false }] : [],
+  );
+  const shownRef = useRef(text);
+
+  useEffect(() => {
+    const shown = shownRef.current;
+    if (text === shown) return;
+    shownRef.current = text;
+    if (shown && text.startsWith(shown)) {
+      // The line grew by a sentence — fade the appended part in as Ignis speaks it.
+      const delta = text.slice(shown.length);
+      if (delta) setChunks((cs) => [...cs, { text: delta, fade: true }]);
+    } else {
+      // A different line (new turn / replaced) — restart, no fade on the first piece.
+      setChunks(text ? [{ text, fade: false }] : []);
+    }
+  }, [text]);
+
+  return (
+    <>
+      {chunks.map((c, i) => (
+        <span key={i} style={c.fade ? { animation: 'fade-in .28s ease both' } : undefined}>
+          {c.text}
+        </span>
+      ))}
+    </>
   );
 }

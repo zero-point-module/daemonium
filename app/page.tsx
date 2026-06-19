@@ -39,7 +39,20 @@ export default function Home() {
   // Voice owns both the speech and the synced caption: it segments Ignis's streaming line into
   // sentences, speaks each as it's ready, and reveals the caption in lockstep with the audio.
   const voice = useVoice({ text: d.caption, busy: d.busy, voice: voiceId });
-  const mic = useMic({ onTranscript: d.run, isSpeaking: voice.isSpeaking });
+
+  // Hands-free conversation: tap the sigil to begin, tap to end. While conversing, VAD ends each
+  // turn (auto) and the mic reopens after Ignis finishes (the effect below). onNoSpeech ends a
+  // conversation that's gone quiet so the mic never stays open indefinitely.
+  const [conversing, setConversing] = useState(false);
+  const mic = useMic({
+    onTranscript: d.run,
+    isSpeaking: voice.isSpeaking,
+    auto: true,
+    onNoSpeech: () => {
+      setConversing(false);
+      voice.interrupt();
+    },
+  });
 
   const shellRef = useRef<HTMLDivElement>(null);
   const pagerRef = useRef<HTMLDivElement>(null);
@@ -58,6 +71,33 @@ export default function Home() {
     paused: d.busy || mic.recording || voice.isSpeaking || !!d.proposal,
     run: d.run,
   });
+
+  // Continuous conversation: once we're conversing, reopen the mic for the next turn as soon as
+  // the stage is clear — Ignis isn't speaking, no turn is in flight, and nothing awaits a tap.
+  // The short delay debounces a one-render transient and gives a natural beat after Ignis stops.
+  useEffect(() => {
+    if (!ready || !conversing) return;
+    if (d.busy || voice.isSpeaking || d.proposal || d.executingAction) return;
+    if (mic.recording || mic.transcribing) return;
+    const t = window.setTimeout(() => mic.start(), 300);
+    return () => window.clearTimeout(t);
+  }, [
+    ready,
+    conversing,
+    d.busy,
+    voice.isSpeaking,
+    d.proposal,
+    d.executingAction,
+    mic.recording,
+    mic.transcribing,
+    mic.start,
+  ]);
+
+  // Leaving the ready state ends any hands-free conversation so it can't silently auto-reopen the
+  // mic on a later re-entry.
+  useEffect(() => {
+    if (!ready) setConversing(false);
+  }, [ready]);
 
   // The flame leads onboarding (it "thinks" while minting); the real mic drives the
   // `listening` overlay on an otherwise-idle flame.
@@ -96,7 +136,29 @@ export default function Home() {
   // buys nothing, and a fresh closure each render avoids stale-value footguns.
   const handleTap = () => {
     voice.unlock();
-    mic.toggle();
+    if (!conversing) {
+      // Begin a hands-free conversation. Open the mic from inside this tap (iOS needs the gesture
+      // to grant the mic + arm audio); the effect above handles every reopen after this.
+      setConversing(true);
+      mic.start();
+      return;
+    }
+    if (voice.isSpeaking) {
+      // Cut Ignis off and keep the conversation going — stop the audio AND abort the reply so the
+      // mic can reopen now instead of after the model finishes. The reopen effect handles the rest.
+      voice.interrupt();
+      d.stop();
+      return;
+    }
+    // Otherwise a tap ends the conversation.
+    endConversation();
+  };
+
+  const endConversation = () => {
+    setConversing(false);
+    voice.interrupt(); // silence any audio + suppress an in-flight reply
+    d.stop(); // abort an in-flight agent turn
+    mic.cancel(); // stop + discard an open capture
   };
 
   const handleSubmit = (text: string) => {
@@ -214,6 +276,8 @@ export default function Home() {
             <LiquidSigil
               listening={mic.recording}
               busy={d.busy || mic.transcribing}
+              conversing={conversing}
+              speaking={voice.isSpeaking}
               onTap={handleTap}
               onSubmit={handleSubmit}
             />

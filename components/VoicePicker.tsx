@@ -10,6 +10,7 @@
 import { useCallback, useRef, useState } from "react";
 import { getAuthToken } from "@dynamic-labs/sdk-react-core";
 import { VOICES, VOICE_CHARACTERS } from "@/app/lib/voices";
+import type { TtsResponse } from "@/app/lib/voice";
 
 const SAMPLE = "I am Ignis. Shall we begin?";
 
@@ -37,13 +38,10 @@ export function VoicePicker({
         body: JSON.stringify({ text: SAMPLE, voice: value }),
       });
       if (!res.ok) throw new Error("preview failed");
-      const url = URL.createObjectURL(await res.blob());
-      const audio = new Audio(url);
+      const { audio: b64 } = (await res.json()) as TtsResponse;
+      const audio = new Audio(`data:audio/mpeg;base64,${b64}`);
       audioRef.current = audio;
-      audio.onended = () => {
-        URL.revokeObjectURL(url);
-        setPreviewing(false);
-      };
+      audio.onended = () => setPreviewing(false);
       await audio.play();
     } catch {
       setPreviewing(false);

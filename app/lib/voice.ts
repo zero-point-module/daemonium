@@ -1,5 +1,5 @@
 /**
- * Shared voice (speech-to-text) constants and types. Safe to import from both the
+ * Shared voice constants and types (STT + TTS). Safe to import from both the
  * server route (/api/stt) and client code — no secrets, no server-only imports.
  */
 
@@ -17,4 +17,20 @@ export const STT_MODEL = "gpt-4o-mini-transcribe" as const;
 /** Response body of POST /api/stt, shared by the route and the mic client. */
 export interface SttResponse {
   text: string;
+}
+
+/** One spoken word + its clip-relative start time (seconds). */
+export interface TtsWord {
+  /** Word text INCLUDING any trailing whitespace, so concatenating words rebuilds the line. */
+  text: string;
+  /** When this word begins, in seconds from the start of THIS clip. */
+  start: number;
+}
+
+/** Response body of POST /api/tts: the mp3 (base64) + per-word timings for synced reveal. */
+export interface TtsResponse {
+  /** base64-encoded audio/mpeg. */
+  audio: string;
+  /** Words in order with clip-relative start times; [] when alignment is unavailable. */
+  words: TtsWord[];
 }

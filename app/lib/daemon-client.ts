@@ -50,7 +50,7 @@ export function useDaemon() {
   // The user's embedded wallet (bridged via wagmi) — the sudo owner that co-signs UserOps.
   const { data: walletClient } = useWalletClient();
 
-  const { messages, sendMessage, status } = useChat({
+  const { messages, sendMessage, status, stop } = useChat({
     transport: new DefaultChatTransport({ api: "/api/agent", headers: authHeaders }),
     onData: (part) => {
       if (part.type !== "data-daemon") return;
@@ -87,6 +87,14 @@ export function useDaemon() {
     },
     [sendMessage],
   );
+
+  /** Barge-in: abort the in-flight agent turn and drop the flame back to idle. No-op when nothing
+   *  is streaming. */
+  const stopStream = useCallback(() => {
+    void stop();
+    reacting.current = false;
+    setState("idle");
+  }, [stop]);
 
   const confirm = useCallback(
     async (executionId: string) => {
@@ -159,6 +167,7 @@ export function useDaemon() {
     txResult,
     executingAction,
     sendPrompt,
+    stopStream,
     confirm,
     dismissProposal,
   };

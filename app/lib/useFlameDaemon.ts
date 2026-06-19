@@ -29,6 +29,8 @@ export interface FlameDaemon {
   busy: boolean;
   /** Send an utterance to the live agent (/api/agent). */
   run: (text: string) => void;
+  /** Abort the in-flight turn (barge-in) and return the flame to idle. */
+  stop: () => void;
   /** Pending action awaiting the human confirm tap, or null. */
   proposal: ProposalCard | null;
   /** The action currently signing+broadcasting (the `executing` wait), or null. */
@@ -86,6 +88,7 @@ export function useFlameDaemon(): FlameDaemon {
     txResult,
     executingAction,
     sendPrompt,
+    stopStream,
     confirm,
     dismissProposal,
   } = useDaemon();
@@ -100,6 +103,7 @@ export function useFlameDaemon(): FlameDaemon {
     messages: thread,
     busy,
     run: sendPrompt,
+    stop: stopStream,
     proposal,
     executingAction,
     txResult,

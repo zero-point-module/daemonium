@@ -60,6 +60,19 @@ function extensionFor(mimeType: string): string {
   return "bin";
 }
 
+/**
+ * VAD (voice-activity detection) tuning for hands-free endpointing. These are deliberate but
+ * conservative defaults — they WILL need calibration on a real device + mic: the RMS threshold
+ * in particular depends on mic gain and the browser's noise suppression.
+ */
+const VAD_SAMPLE_MS = 50; // how often we measure the input level
+const VAD_RMS_THRESHOLD = 0.025; // above this = "voice", below = "silence"
+const VAD_ONSET_TICKS = 2; // consecutive voiced samples before it counts as speech (filters clicks)
+const VAD_MIN_SPEECH_MS = 250; // a turn needs at least this much real voice — filters coughs/bumps
+const VAD_HANGOVER_MS = 800; // trailing silence after speech that ends the turn
+const VAD_NO_SPEECH_MS = 10000; // mic opened but heard nothing at all -> give up (onNoSpeech)
+const VAD_MAX_MS = 20000; // hard cap on a single utterance
+
 export interface UseMicOptions {
   /** Called with the final transcript once /api/stt returns. Empty string is skipped. */
   onTranscript: (text: string) => void;
@@ -70,6 +83,17 @@ export interface UseMicOptions {
   isSpeaking?: boolean;
   /** Optional error sink (e.g. denied permission, no mic, network). */
   onError?: (message: string) => void;
+  /**
+   * Hands-free endpointing: when true, an open mic auto-stops on end-of-speech (and uploads), so
+   * the user never taps to stop. Default false = manual tap-to-stop.
+   */
+  auto?: boolean;
+  /**
+   * Called when an auto (VAD) capture opened but heard no speech within VAD_NO_SPEECH_MS — the
+   * recording is discarded (not uploaded). The page uses this to end a hands-free conversation
+   * that's gone quiet instead of holding the mic open forever.
+   */
+  onNoSpeech?: () => void;
 }
 
 export interface UseMic {
@@ -85,12 +109,16 @@ export interface UseMic {
   stop: () => void;
   /** start() if idle, stop() if recording. Call this from the mic button onClick. */
   toggle: () => void;
+  /** Stop recording and DISCARD it (no upload) — e.g. the user ended the conversation. */
+  cancel: () => void;
 }
 
 export function useMic({
   onTranscript,
   isSpeaking = false,
   onError,
+  auto = false,
+  onNoSpeech,
 }: UseMicOptions): UseMic {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -103,12 +131,23 @@ export function useMic({
   const startingRef = useRef(false); // guards double-taps during the async start
   const discardNextRef = useRef(false); // tear down the next stop() WITHOUT uploading
 
+  // VAD graph + loop — only used when `auto` is set. Refs so the measuring loop never re-renders.
+  const vadCtxRef = useRef<AudioContext | null>(null);
+  const vadAnalyserRef = useRef<AnalyserNode | null>(null);
+  const vadBufRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const vadSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const vadTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Keep callbacks current without making start/stop depend on them (stable handlers).
   const onTranscriptRef = useRef(onTranscript);
   const onErrorRef = useRef(onError);
+  const onNoSpeechRef = useRef(onNoSpeech);
+  const autoRef = useRef(auto);
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
     onErrorRef.current = onError;
+    onNoSpeechRef.current = onNoSpeech;
+    autoRef.current = auto;
   });
 
   const fail = useCallback((message: string) => {
@@ -121,6 +160,109 @@ export function useMic({
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }, []);
+
+  /** Lazily create + resume the analysis AudioContext. Called synchronously inside the starting
+   *  tap so iOS unlocks it from the gesture; reused across captures afterwards. */
+  const ensureVadContext = useCallback((): AudioContext | null => {
+    if (typeof window === "undefined") return null;
+    if (!vadCtxRef.current) {
+      const Ctor =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!Ctor) return null;
+      const ctx = new Ctor();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      vadCtxRef.current = ctx;
+      vadAnalyserRef.current = analyser;
+      vadBufRef.current = new Uint8Array(analyser.fftSize);
+    }
+    if (vadCtxRef.current.state === "suspended") void vadCtxRef.current.resume();
+    return vadCtxRef.current;
+  }, []);
+
+  /** Stop the VAD loop and detach the per-capture source (keeps the context alive for reuse). */
+  const stopVad = useCallback(() => {
+    if (vadTimerRef.current != null) {
+      clearInterval(vadTimerRef.current);
+      vadTimerRef.current = null;
+    }
+    if (vadSourceRef.current) {
+      try {
+        vadSourceRef.current.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      vadSourceRef.current = null;
+    }
+  }, []);
+
+  /** Measure the input level and auto-stop on end-of-speech (hands-free). Falls back to manual
+   *  tap-to-stop if Web Audio is unavailable. Operates on recorderRef directly so it never has to
+   *  depend on the stop() callback. */
+  const beginVad = useCallback(
+    (stream: MediaStream) => {
+      const ctx = ensureVadContext();
+      const analyser = vadAnalyserRef.current;
+      const buf = vadBufRef.current;
+      if (!ctx || !analyser || !buf) return;
+
+      const source = ctx.createMediaStreamSource(stream);
+      source.connect(analyser); // analysis only — deliberately NOT connected to destination
+      vadSourceRef.current = source;
+
+      const startedAt = Date.now();
+      let lastVoiceAt = startedAt;
+      let voicedTicks = 0;
+      let voicedMs = 0; // cumulative voiced time this utterance — gates real speech vs a blip
+      let speechStarted = false;
+
+      vadTimerRef.current = setInterval(() => {
+        const recorder = recorderRef.current;
+        if (!recorder || recorder.state === "inactive") return;
+        analyser.getByteTimeDomainData(buf);
+        let sumSquares = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const v = (buf[i] - 128) / 128;
+          sumSquares += v * v;
+        }
+        const rms = Math.sqrt(sumSquares / buf.length);
+        const now = Date.now();
+
+        if (rms > VAD_RMS_THRESHOLD) {
+          voicedTicks++;
+          voicedMs += VAD_SAMPLE_MS;
+          lastVoiceAt = now;
+          if (!speechStarted && voicedTicks >= VAD_ONSET_TICKS) speechStarted = true;
+        } else {
+          voicedTicks = 0;
+        }
+
+        if (!speechStarted) {
+          // Heard nothing yet — give up after a while so the mic never stays open forever.
+          if (now - startedAt > VAD_NO_SPEECH_MS) {
+            discardNextRef.current = true;
+            onNoSpeechRef.current?.();
+            recorder.stop(); // onstop discards (see discardNextRef)
+          }
+          return;
+        }
+        if (now - lastVoiceAt > VAD_HANGOVER_MS) {
+          if (voicedMs >= VAD_MIN_SPEECH_MS) {
+            recorder.stop(); // real speech + trailing silence -> end the turn (onstop uploads)
+          } else {
+            // Too little real voice to be a turn (a cough/bump) — keep listening, don't upload.
+            speechStarted = false;
+            voicedMs = 0;
+          }
+          return;
+        }
+        if (now - startedAt > VAD_MAX_MS) recorder.stop(); // hard cap -> upload what we have
+      }, VAD_SAMPLE_MS);
+    },
+    [ensureVadContext],
+  );
 
   const upload = useCallback(async (blob: Blob) => {
     setTranscribing(true);
@@ -169,10 +311,23 @@ export function useMic({
     setError(null);
     chunksRef.current = [];
 
+    // Unlock the analysis context from inside this tap (iOS) so hands-free endpointing can
+    // measure the input level. Harmless when `auto` is off.
+    if (autoRef.current) ensureVadContext();
+
     // getUserMedia is async but is still inside the tap's task on iOS, which is what
     // the permission/gesture requirement needs.
     navigator.mediaDevices
-      .getUserMedia({ audio: true })
+      // Ask for the browser's voice processing: echo cancellation keeps the reopened mic from
+      // hearing Ignis's own tail (half-duplex barge-in), and noise suppression steadies the noise
+      // floor so the fixed VAD threshold behaves more consistently across devices.
+      .getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
       .then((stream) => {
         // If stop() was called while we were awaiting permission, bail cleanly.
         if (!startingRef.current) {
@@ -191,6 +346,7 @@ export function useMic({
           if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
         };
         recorder.onstop = () => {
+          stopVad();
           const discard = discardNextRef.current;
           discardNextRef.current = false;
           // Prefer the recorder's negotiated type; fall back to the first chunk's.
@@ -201,11 +357,12 @@ export function useMic({
           recorderRef.current = null;
           releaseStream();
           setRecording(false);
-          // `discard` = interrupted because Ignis began speaking; don't transcribe the
-          // half-captured audio into a spurious turn.
+          // `discard` = throw this capture away instead of transcribing it: Ignis began
+          // speaking, the user ended the conversation, or VAD heard no speech at all.
           if (!discard && blob.size > 0) void upload(blob);
         };
         recorder.onerror = () => {
+          stopVad();
           fail("Recording error");
           releaseStream();
           recorderRef.current = null;
@@ -215,6 +372,7 @@ export function useMic({
         recorder.start();
         startingRef.current = false;
         setRecording(true);
+        if (autoRef.current) beginVad(stream);
       })
       .catch((err: unknown) => {
         startingRef.current = false;
@@ -228,7 +386,7 @@ export function useMic({
               : "Could not start recording",
         );
       });
-  }, [isSpeaking, fail, releaseStream, upload]);
+  }, [isSpeaking, fail, releaseStream, upload, ensureVadContext, beginVad, stopVad]);
 
   const stop = useCallback(() => {
     // Cancel a start still awaiting permission.
@@ -248,6 +406,21 @@ export function useMic({
     if (recorderRef.current || startingRef.current) stop();
     else start();
   }, [start, stop]);
+
+  /** Stop and DISCARD the current capture (no upload) — used when ending a conversation. */
+  const cancel = useCallback(() => {
+    if (startingRef.current) {
+      startingRef.current = false;
+      releaseStream();
+      setRecording(false);
+      return;
+    }
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      discardNextRef.current = true;
+      recorder.stop(); // onstop discards
+    }
+  }, [releaseStream]);
 
   // If Ignis starts speaking mid-capture, drop the recording (half-duplex) WITHOUT uploading
   // the partial audio. Only flag discard when a real recorder exists; a still-arming start has
@@ -276,8 +449,16 @@ export function useMic({
       recorderRef.current = null;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+      // Tear down the VAD loop, source, and context.
+      if (vadTimerRef.current != null) clearInterval(vadTimerRef.current);
+      vadTimerRef.current = null;
+      vadSourceRef.current?.disconnect();
+      vadSourceRef.current = null;
+      const vadCtx = vadCtxRef.current;
+      if (vadCtx && vadCtx.state !== "closed") void vadCtx.close();
+      vadCtxRef.current = null;
     };
   }, []);
 
-  return { recording, transcribing, error, start, stop, toggle };
+  return { recording, transcribing, error, start, stop, toggle, cancel };
 }
