@@ -10,10 +10,14 @@
  * (provisioning is idempotent), since a different handle is no longer possible.
  */
 import { useState } from "react";
+import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import { authHeaders } from "../lib/daemon-client";
 import { validateHandle, HANDLE_ERROR_MESSAGE, normalizeHandle } from "../lib/handle-format";
 
 export function HandleModal({ onDone }: { onDone: (ensName: string) => void }) {
+  // The embedded-wallet EOA — sudo owner of the smart account the claim provisions.
+  const { primaryWallet } = useDynamicContext();
+  const ownerEoa = primaryWallet?.address ?? null;
   const [handle, setHandle] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,12 +30,16 @@ export function HandleModal({ onDone }: { onDone: (ensName: string) => void }) {
 
   async function submit() {
     setError(null);
+    if (!ownerEoa) {
+      setError("Connect your wallet first — your smart account is owned by it.");
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch("/api/daemon/handle", {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ handle: normalized }),
+        body: JSON.stringify({ handle: normalized, ownerEoa }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {

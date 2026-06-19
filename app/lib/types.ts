@@ -175,3 +175,23 @@ export interface ExecuteResponse {
   /** Chain id the tx ran on, so the UI links to the right block explorer (Base vs L1 vs bridge src). */
   chainId?: number;
 }
+
+/** One contract call in a UserOp the user's smart account will run. `value` is a decimal wei string
+ *  (JSON-safe; the client parses it to bigint). */
+export interface PreparedCall {
+  to: string;
+  data: string;
+  value: string;
+}
+
+/**
+ * The confirm tap first calls POST /api/daemon/execute, which DECIDES how the action runs:
+ *  • "server" — already executed on the server (an autonomous session key signed it, or a
+ *    non-value action like spawn ran server-side). The outcome is returned inline.
+ *  • "cosign" — the user must sign the UserOp themselves: the server returns the encoded `calls`
+ *    (built from the stored proposal — never client input), the client co-signs with the embedded
+ *    wallet and submits, then POSTs /api/daemon/execute/complete to record + consume the proposal.
+ */
+export type PrepareResponse =
+  | { mode: "server"; ok: boolean; hash?: string; error?: string; chainId?: number }
+  | { mode: "cosign"; executionId: string; calls: PreparedCall[]; chainId: number };

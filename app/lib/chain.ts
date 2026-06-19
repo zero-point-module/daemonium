@@ -133,11 +133,37 @@ export const LIFI_DEFAULT_VAULT = "AAVE_USDC";
  */
 export const AGENT_MODEL = process.env.AGENT_MODEL ?? "anthropic/claude-sonnet-4.6";
 
-/* Gas seeds on the IDENTITY chain (L1) — real ETH, kept lean. Covers a dæmon's own ERC-8004
- * register + ENS text record; the minter pays subname mints. Tune for live gas. */
-export const SUBAGENT_GAS_SEED = "0.0001"; // ETH a parent seeds a freshly spawned sub-agent
-export const IGNIS_GAS_SEED = "0.001"; // ETH the minter seeds a user's dæmon at claim time
+/* Gas seeds on the IDENTITY chain (L1) — real ETH, kept lean. Now the minter seeds the USER'S
+ * SMART ACCOUNT (not the agent): self-funded UserOps pay their own gas, and the FIRST L1 UserOp
+ * also counterfactually DEPLOYS the account, so the dæmon seed is higher than a plain register.
+ * Tune for live gas. */
+export const SUBAGENT_GAS_SEED = "0.0002"; // ETH seeded for a sub-agent's identity UserOps
+export const IGNIS_GAS_SEED = "0.0003"; // ETH seeded to a user's smart account (deploy + register + setText)
 export const GAS_SEED_THRESHOLD = "0.0015"; // seed only if balance is below this
+/** ETH seeded to the smart account on the DeFi chain (Base) so value UserOps can pay their gas. */
+export const DEFI_GAS_SEED = "0.0008";
+export const DEFI_GAS_SEED_THRESHOLD = "0.0004";
+
+/* ───────────────────────── Account abstraction (ERC-4337 / ZeroDev Kernel) ─────────────────────
+ * Each user owns ONE Kernel smart account (same deterministic address on every chain, derived from
+ * their Dynamic embedded wallet as the sudo owner). Agents are scoped session keys on it. The
+ * EntryPoint/Kernel-version SDK objects live in smart-account.ts (server-only) to keep the heavy
+ * @zerodev/sdk out of any client bundle that imports this data-only module. */
+/** Salt/index used when deriving the Kernel account address; 0 = the user's primary account. */
+export const KERNEL_ACCOUNT_INDEX = 0n;
+/** Bundler RPC endpoints (server). UserOps are submitted here; unset → a clear error at use time. */
+export const BUNDLER_RPC_MAINNET = process.env.BUNDLER_RPC_MAINNET;
+export const BUNDLER_RPC_BASE = process.env.BUNDLER_RPC_BASE;
+
+/** Contracts a value-layer session key may call (the on-chain policy allowlist for autonomy).
+ * USDC for transfers; the Base Uniswap UniversalRouter + Permit2 cover the swap path. LI.FI's
+ * diamond covers zap/bridge. Refined per policy in smart-account.ts. */
+export const VALUE_POLICY_TARGETS = {
+  usdc: USDC.address,
+  universalRouter: "0x6fF5693b99212Da76ad316178A184AB56D299b43" as Address, // Base UniversalRouter
+  permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3" as Address,
+  lifiDiamond: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE" as Address, // LI.FI diamond (canonical)
+} as const;
 
 /** Public base URL of this app. Set APP_BASE_URL on deploy so agent-card URIs resolve. */
 export const APP_BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:3000";

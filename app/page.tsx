@@ -224,10 +224,12 @@ export default function Home() {
                 error={onb.error}
                 reservedHandle={onb.reservedHandle}
                 activeHandle={onb.activeHandle}
+                smartAccount={onb.smartAccount}
                 onClaim={(h) => {
                   voice.unlock();
                   onb.claim(h);
                 }}
+                onConfirmFunded={onb.confirmFunded}
                 onRetry={onb.retry}
               />
             </div>

@@ -5,9 +5,17 @@
  * no separate "claim" step. This is the slow call (several Ethereum txs); the modal shows a
  * loading state.
  */
+import { isAddress, type Address } from "viem";
 import { verifyUser, AuthError } from "@/app/lib/auth";
-import { getHandle, claimHandle, ensNameForHandle } from "@/app/lib/handles";
+import {
+  getHandle,
+  claimHandle,
+  ensNameForHandle,
+  setUserSmartAccount,
+  getUserSmartAccount,
+} from "@/app/lib/handles";
 import { provisionIdentity } from "@/app/lib/provision";
+import { deriveUserKernelAddress } from "@/app/lib/smart-account";
 import { getWallet } from "@/app/lib/wallet-store";
 import { withRoute } from "@/app/lib/observe";
 
@@ -36,12 +44,14 @@ async function getHandler(req: Request) {
     return Response.json({ handle: null, ensName: null, identityComplete: false });
   }
   const ensName = ensNameForHandle(handle);
-  const wallet = await getWallet(ensName);
-  // identityComplete = the ERC-8004 step finished. If false, the client re-POSTs to finish
-  // provisioning (idempotent) — this self-heals accounts that half-provisioned.
+  const [wallet, sa] = await Promise.all([getWallet(ensName), getUserSmartAccount(userId)]);
+  // The app is usable once the user's smart account is bound (that's what co-signs value actions).
+  // `smartAccount: null` means a LEGACY/half-provisioned account — the client re-POSTs with
+  // ownerEoa to backfill it. `identityComplete` (the ERC-8004 step) is informational + best-effort.
   return Response.json({
     handle,
     ensName,
+    smartAccount: sa?.smartAccount ?? null,
     identityComplete: Boolean(wallet?.agentId),
   });
 }
@@ -62,6 +72,14 @@ async function postHandler(req: Request) {
     return Response.json({ error: "handle (string) required" }, { status: 400 });
   }
 
+  // The user's embedded-wallet EOA — sudo owner of their Kernel smart account. We derive the SA
+  // address from it (server-side, never trusting a client-sent SA) and make it the on-chain owner.
+  const rawOwner = body?.ownerEoa;
+  if (typeof rawOwner !== "string" || !isAddress(rawOwner)) {
+    return Response.json({ error: "ownerEoa (wallet address) required" }, { status: 400 });
+  }
+  const ownerEoa = rawOwner as Address;
+
   const claimed = await claimHandle(userId, raw);
   if (!claimed.ok) {
     // invalid format → 400 (client bug); reserved/taken → 409 (conflict).
@@ -70,7 +88,12 @@ async function postHandler(req: Request) {
   }
 
   try {
-    const result = await provisionIdentity(claimed.handle);
+    // Derive + persist the user→SA binding BEFORE provisioning, so a retry can recover the SA
+    // even if a later step hiccups. The SA address is deterministic from the owner EOA.
+    const smartAccount = await deriveUserKernelAddress(ownerEoa);
+    await setUserSmartAccount(userId, { ownerEoa, smartAccount });
+
+    const result = await provisionIdentity(claimed.handle, { ownerEoa, smartAccount });
     return Response.json({ handle: claimed.handle, ...result });
   } catch (err) {
     // Handle is reserved for the user even if provisioning hiccups; they can retry.

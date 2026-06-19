@@ -35,10 +35,14 @@ export function buildTools({
   // Resolve an optional sub-agent label to a full agent key within this user's cluster.
   const keyFor = (subagent?: string) => (subagent ? `${subagent}.${selfKey}` : selfKey);
 
+  // The address the agent ACTS AS for value: the user's smart account, where funds live and where
+  // the human funds it. The agent's own MPC address is just the session-key signer (used internally
+  // to sign UserOps) — it is NOT surfaced as "your wallet", which is what confused the user when the
+  // funding modal showed the smart account but the agent reported its signer address.
   async function addressFor(key: string): Promise<Address> {
     const w = await getWallet(key);
     if (!w) throw new Error(`Agent "${key}" has no wallet yet`);
-    return w.address as Address;
+    return (w.ownerSmartAccount ?? w.address) as Address;
   }
 
   return {
@@ -62,14 +66,23 @@ export function buildTools({
           defiClient.getBalance({ address }),
           defiClient.readContract(usdcAbi).catch(() => 0n),
         ]);
+        // Unified, chain-spanning view: the same account holds funds on both chains, so report a
+        // total and which chain each balance sits on. Lets the agent route across chains (bridge
+        // then act) instead of treating each chain as a separate wallet.
+        const ethUsdc = Number(formatUnits(l1Usdc, 6));
+        const baseUsdcNum = Number(formatUnits(baseUsdc, USDC.decimals));
         return {
           agent: key,
           address,
           ethereum: { eth: formatEther(l1Eth), usdc: formatUnits(l1Usdc, 6) },
           base: { eth: formatEther(baseEth), usdc: formatUnits(baseUsdc, USDC.decimals) },
+          // One account across chains — totals + where the value currently sits.
+          totalUsdc: (ethUsdc + baseUsdcNum).toString(),
+          usdcByChain: { ethereum: ethUsdc.toString(), base: baseUsdcNum.toString() },
           note:
-            "Swaps, zaps and sends run on Base. If your funds are on Ethereum and you need to act " +
-            "on Base, bridge them over first with bridge_tokens.",
+            "This is ONE account across both chains. Swaps/zaps/sends run on Base; identity on " +
+            "Ethereum. If a value action needs funds that are on the other chain, bridge_tokens " +
+            "first, then do the action — don't make the human pick a chain.",
         };
       },
     }),
@@ -114,7 +127,10 @@ export function buildTools({
         if (!w) return { agent: key, exists: false };
         return {
           ensName: w.ensName,
-          address: w.address,
+          // The account that owns your identity + holds your funds (the human's smart account).
+          address: w.ownerSmartAccount ?? w.address,
+          // Your session-key signer (the MPC wallet that signs on the account's behalf).
+          signer: w.address,
           agentId: w.agentId ?? null,
           agentCardUri: w.agentCardUri ?? null,
           parent: w.parent ?? null,
@@ -234,7 +250,7 @@ export function buildTools({
           const me = await getWallet(selfKey);
           if (me) {
             const q = await getSwapQuote({
-              account: me.address as Address,
+              account: (me.ownerSmartAccount ?? me.address) as Address,
               fromToken: from.address,
               toToken: to.address,
               fromAmount: parseUnits(amount, from.decimals).toString(),
@@ -296,7 +312,7 @@ export function buildTools({
           const me = await getWallet(selfKey);
           if (me) {
             const r = await composeSwapAndZap({
-              signer: me.address as Address,
+              signer: (me.ownerSmartAccount ?? me.address) as Address,
               fromToken: from.address,
               fromDecimals: from.decimals,
               amount,
@@ -364,8 +380,8 @@ export function buildTools({
               fromToken: tokenS,
               toToken: tokenS,
               fromAmount: parseUnits(amount, 6).toString(),
-              fromAddress: me.address as Address,
-              toAddress: me.address as Address,
+              fromAddress: (me.ownerSmartAccount ?? me.address) as Address,
+              toAddress: (me.ownerSmartAccount ?? me.address) as Address,
             });
             const out = q.estimate?.toAmount && q.action?.toToken?.decimals !== undefined
               ? formatUnits(BigInt(q.estimate.toAmount), q.action.toToken.decimals)

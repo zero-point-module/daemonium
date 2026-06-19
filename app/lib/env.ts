@@ -31,9 +31,32 @@ const schema = z.object({
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).optional(),
   MINTER_WALLET: z.string().optional(),
 
+  // --- Account abstraction (ERC-4337) bundlers. Optional: provisioning/value ops that need a
+  //     UserOp surface a clear error if unset. Use a ZeroDev or Pimlico endpoint per chain. A chain
+  //     is "active" for smart-account ops once its bundler is set. ---
+  BUNDLER_RPC_MAINNET: z.string().optional(), //  identity-layer UserOps (Ethereum L1)
+  BUNDLER_RPC_BASE: z.string().optional(), //     value-layer UserOps (Base, server-side autonomy)
+  BUNDLER_RPC_ARBITRUM: z.string().optional(), // optional extra value chains (server autonomy)
+  BUNDLER_RPC_OPTIMISM: z.string().optional(),
+  BUNDLER_RPC_POLYGON: z.string().optional(),
+  ARBITRUM_RPC_URL: z.string().optional(), //     server reads for the extra chains (default: public)
+  OPTIMISM_RPC_URL: z.string().optional(),
+  POLYGON_RPC_URL: z.string().optional(),
+
   // --- Optional, client-exposed (fallbacks live in app/providers.tsx). ---
   NEXT_PUBLIC_DYNAMIC_ENVIRONMENT_ID: z.string().optional(),
   NEXT_PUBLIC_SEPOLIA_RPC_URL: z.string().optional(),
+  NEXT_PUBLIC_BASE_RPC_URL: z.string().optional(), //    client reads + co-sign public client (Base)
+  NEXT_PUBLIC_MAINNET_RPC_URL: z.string().optional(), // client reads + co-sign public client (L1)
+  NEXT_PUBLIC_BUNDLER_RPC_BASE: z.string().optional(), // client co-sign UserOp submission (Base)
+  NEXT_PUBLIC_BUNDLER_RPC_MAINNET: z.string().optional(), // client co-sign UserOp submission (L1)
+  // Optional extra value chains for client co-sign — set bundler (+ RPC) to switch each on.
+  NEXT_PUBLIC_BUNDLER_RPC_ARBITRUM: z.string().optional(),
+  NEXT_PUBLIC_BUNDLER_RPC_OPTIMISM: z.string().optional(),
+  NEXT_PUBLIC_BUNDLER_RPC_POLYGON: z.string().optional(),
+  NEXT_PUBLIC_ARBITRUM_RPC_URL: z.string().optional(),
+  NEXT_PUBLIC_OPTIMISM_RPC_URL: z.string().optional(),
+  NEXT_PUBLIC_POLYGON_RPC_URL: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

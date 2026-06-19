@@ -19,20 +19,79 @@ export function Onboarding({
   error,
   reservedHandle,
   activeHandle,
+  smartAccount,
   onClaim,
+  onConfirmFunded,
   onRetry,
 }: {
   status: OnboardingStatus;
   error: string | null;
   reservedHandle: string | null;
   activeHandle: string | null;
+  smartAccount: string | null;
   onClaim: (handle: string) => void;
+  onConfirmFunded: () => void;
   onRetry: () => void;
 }) {
   const [text, setText] = useState('');
+  const [copied, setCopied] = useState(false);
 
   // ready is handled by the page (it shows the mic instead); nothing to draw here.
   if (status === 'ready') return null;
+
+  // First-run funding: show the smart-account address to top up before transacting. Your dæmon's
+  // funds + gas live here (self-funded), so it needs a little Base ETH (+ USDC) before it can act.
+  if (status === 'needs-funding') {
+    const addr = smartAccount ?? '';
+    const copy = async () => {
+      try {
+        await navigator.clipboard.writeText(addr);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      } catch {
+        /* clipboard blocked — the address is shown for manual copy */
+      }
+    };
+    return (
+      <div className="flex w-full max-w-[21rem] flex-col items-center gap-4 text-center">
+        <div className="flex flex-col items-center gap-1">
+          <h2 className="text-[17px] font-semibold text-white/90">Fund your dæmon</h2>
+          <p className="text-[13px] text-white/45">
+            Your dæmon holds its own funds + gas. Send a little{' '}
+            <span className="text-white/70">Base ETH</span> (and USDC to spend) to its smart account,
+            then enter.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={copy}
+          aria-label="Copy smart account address"
+          className="w-full break-all rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 font-mono text-[12px] text-white/80 transition active:scale-[0.99]"
+        >
+          {addr || '…'}
+          <span className="mt-1 block text-[10px] uppercase tracking-wide text-white/35">
+            {copied ? 'copied' : 'tap to copy · Base'}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onConfirmFunded}
+          className="rounded-full px-7 py-3 text-sm font-semibold text-black transition active:scale-95"
+          style={{
+            background: 'var(--state, #ff7a18)',
+            boxShadow: '0 0 30px color-mix(in srgb, var(--state, #ff7a18) 40%, transparent)',
+          }}
+        >
+          Account funded — enter
+        </button>
+        <p className="text-[11px] text-white/30">
+          You can fund it later too — actions will just wait until it has gas.
+        </p>
+      </div>
+    );
+  }
 
   // A quiet beat while we look up whether they already have a dæmon.
   if (status === 'checking') {

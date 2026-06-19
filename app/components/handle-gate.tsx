@@ -8,6 +8,7 @@
  * logged in.
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import { authHeaders } from "../lib/daemon-client";
 import { HandleModal } from "./handle-modal";
 
@@ -23,6 +24,8 @@ export function HandleGate({
 }: {
   children: ReactNode | ((ensName: string) => ReactNode);
 }) {
+  const { primaryWallet } = useDynamicContext();
+  const ownerEoa = primaryWallet?.address ?? null;
   const [state, setState] = useState<State>({ status: "checking" });
   const [reloadKey, setReloadKey] = useState(0);
   const retry = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -41,8 +44,8 @@ export function HandleGate({
         const data = await res.json();
         if (cancelled) return;
         if (!data.handle) setState({ status: "needs-handle" });
-        else if (data.identityComplete) setState({ status: "ready", ensName: data.ensName });
-        else setState({ status: "completing", handle: data.handle });
+        else if (data.smartAccount) setState({ status: "ready", ensName: data.ensName });
+        else setState({ status: "completing", handle: data.handle }); // bind SA / finish setup
       } catch {
         if (!cancelled) setState({ status: "error" });
       }
@@ -55,17 +58,18 @@ export function HandleGate({
   // 2. Finish provisioning for a handle that exists but isn't fully claimed yet (idempotent).
   useEffect(() => {
     if (state.status !== "completing") return;
+    if (!ownerEoa) return; // wait until the embedded wallet (SA owner) is available
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch("/api/daemon/handle", {
           method: "POST",
           headers: { "content-type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ handle: state.handle }),
+          body: JSON.stringify({ handle: state.handle, ownerEoa }),
         });
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
-        if (res.ok && data.ensName) setState({ status: "ready", ensName: data.ensName });
+        if (res.ok && data.smartAccount) setState({ status: "ready", ensName: data.ensName });
         else setState({ status: "error", message: data.error });
       } catch (err) {
         if (!cancelled) {
@@ -76,7 +80,7 @@ export function HandleGate({
     return () => {
       cancelled = true;
     };
-  }, [state]);
+  }, [state, ownerEoa]);
 
   if (state.status === "checking") {
     return <p className="text-sm text-zinc-500">Checking your dæmon…</p>;

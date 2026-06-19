@@ -18,6 +18,25 @@ import {
 } from "./handle-format";
 
 const NS = "handles"; // field = userId, value = handle
+const OWNERS_NS = "owners"; // field = userId, value = { ownerEoa, smartAccount }
+
+/** The user→smart-account binding: their embedded-wallet EOA and the derived Kernel SA address. */
+export interface UserSmartAccount {
+  /** The Dynamic embedded-wallet EOA — the SA's sudo owner. */
+  ownerEoa: string;
+  /** The deterministic Kernel smart-account address (same on every chain). */
+  smartAccount: string;
+}
+
+/** Record the user→SA binding so any route with just a userId (e.g. /init) can resolve it. */
+export function setUserSmartAccount(userId: string, v: UserSmartAccount): Promise<void> {
+  return kvSet(OWNERS_NS, userId, v);
+}
+
+/** The user's smart-account binding, or undefined if they haven't provisioned one yet. */
+export function getUserSmartAccount(userId: string): Promise<UserSmartAccount | undefined> {
+  return kvGet<UserSmartAccount>(OWNERS_NS, userId);
+}
 
 /** The dæmon's full ENS name (= its agent key everywhere): `<handle>.daemonium.eth`. */
 export function ensNameForHandle(handle: string): string {

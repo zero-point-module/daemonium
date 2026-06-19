@@ -17,6 +17,8 @@ const NS = "wallets";
 
 export interface StoredWallet {
   label: string;
+  /** The agent's Dynamic MPC address. Under the smart-account model this is the agent's
+   *  SESSION-KEY signer, not the on-chain owner of funds/identity. */
   address: string;
   createdAt: string;
   ensName?: string;
@@ -24,6 +26,12 @@ export interface StoredWallet {
   agentCardUri?: string;
   parent?: string;
   children: string[];
+  /** The user's Kernel smart-account address — the on-chain OWNER of this agent's identity and
+   *  funds. Same address across chains. Set at provision time on the user's root dæmon record. */
+  ownerSmartAccount?: string;
+  /** The user's embedded-wallet EOA that is the smart account's sudo owner (the SA is derived
+   *  deterministically from it). */
+  ownerEoa?: string;
 }
 
 export function getWallet(label: string): Promise<StoredWallet | undefined> {

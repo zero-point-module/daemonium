@@ -6,6 +6,8 @@
  * cluster now lives on its own screen — swipe down from Home.) This gives the open/close
  * interaction a real home (scrim, slide-up, grabber, header, close) so it's ready to grow into.
  */
+import { AutonomyControl } from "@/app/components/autonomy-control";
+
 export function IdentityPanel({
   ensName,
   onClose,
@@ -67,9 +69,10 @@ export function IdentityPanel({
           </button>
         </div>
 
-        <div className="flex flex-1 items-center justify-center px-[22px] pb-7 text-center">
-          <p className="text-[13px] leading-relaxed text-[rgba(246,236,221,0.4)]">
-            Wallet and identity details land here next.
+        <div className="flex flex-1 flex-col gap-4 px-[22px] pb-7">
+          <AutonomyControl />
+          <p className="text-center text-[13px] leading-relaxed text-[rgba(246,236,221,0.4)]">
+            More wallet and identity details land here next.
           </p>
         </div>
       </div>

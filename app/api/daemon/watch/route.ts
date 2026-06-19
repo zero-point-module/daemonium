@@ -43,15 +43,16 @@ async function getHandler(req: Request) {
     return Response.json({ error: "Not your sub-agent" }, { status: 403 });
   }
 
+  // Watch the user's SMART ACCOUNT — that's where funds land now (the agent's MPC address is just
+  // a session-key signer). Fall back to the agent address for legacy accounts without an SA.
+  const watchAddress = (wallet.ownerSmartAccount ?? wallet.address) as `0x${string}`;
+
   const since = sinceParam ? BigInt(sinceParam) : undefined;
-  const { latestBlock, transfers } = await getIncomingUsdc(
-    wallet.address as `0x${string}`,
-    since,
-  );
+  const { latestBlock, transfers } = await getIncomingUsdc(watchAddress, since);
 
   return Response.json({
     agent: key,
-    address: wallet.address,
+    address: watchAddress,
     latestBlock: latestBlock.toString(),
     transfers,
   });
