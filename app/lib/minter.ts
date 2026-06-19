@@ -11,8 +11,19 @@ import "server-only";
 import { parseEther, type Address } from "viem";
 import type { WalletMetadata } from "@dynamic-labs-wallet/node";
 import { ensureAgentWallet, getSigner, seedWalletMetadata } from "./dynamic-server";
-import { identityClient } from "./evm";
-import { IGNIS_GAS_SEED, GAS_SEED_THRESHOLD } from "./chain";
+import { defiClient, identityClient } from "./evm";
+import {
+  IGNIS_GAS_SEED,
+  GAS_SEED_THRESHOLD,
+  DEFI_GAS_SEED,
+  DEFI_GAS_SEED_THRESHOLD,
+  IDENTITY_CHAIN,
+  IDENTITY_CHAIN_ID,
+  IDENTITY_RPC_URL,
+  DEFI_CHAIN,
+  DEFI_CHAIN_ID,
+  DEFI_RPC_URL,
+} from "./chain";
 import { getWallet, putWallet, type StoredWallet } from "./wallet-store";
 import { withLock } from "./lock";
 
@@ -65,26 +76,39 @@ export async function ensureMinter(): Promise<StoredWallet> {
 }
 
 /**
- * Top up `target` with gas from the minter if it's below the threshold. This is the gas
- * subsidy that lets identity-claim and spawn run without the user pre-funding ETH. No-op if
- * the target already has enough. Returns the funding tx hash, or null if nothing was needed.
+ * Top up `target` with gas from the minter if it's below the threshold, on the chosen chain. This
+ * is the self-funded gas subsidy: the IDENTITY chain (L1) funds the dæmon's ERC-8004 register and
+ * any SA identity UserOps; the DEFI chain (Base) funds the user smart account's value UserOps.
+ * No-op if the target already has enough. Returns the funding tx hash, or null if nothing was needed.
  */
-export async function seedGasIfLow(target: Address): Promise<`0x${string}` | null> {
-  // Serialize ALL minter sends: the minter is one EOA, so concurrent spawns/provisions would
-  // otherwise fetch the same nonce and collide ("nonce too low"). Re-checking the balance inside
-  // the lock also stops two callers from double-seeding the same target.
-  return withLock("minter", async () => {
-    const balance = await identityClient.getBalance({ address: target });
-    if (balance >= parseEther(GAS_SEED_THRESHOLD)) return null;
+export async function seedGasIfLow(
+  target: Address,
+  opts: { chain?: "identity" | "defi" } = {},
+): Promise<`0x${string}` | null> {
+  const onDefi = opts.chain === "defi";
+  const pub = onDefi ? defiClient : identityClient;
+  const seed = onDefi ? DEFI_GAS_SEED : IGNIS_GAS_SEED;
+  const threshold = onDefi ? DEFI_GAS_SEED_THRESHOLD : GAS_SEED_THRESHOLD;
+  const signerOpts = onDefi
+    ? { chain: DEFI_CHAIN, chainId: DEFI_CHAIN_ID, rpcUrl: DEFI_RPC_URL }
+    : { chain: IDENTITY_CHAIN, chainId: IDENTITY_CHAIN_ID, rpcUrl: IDENTITY_RPC_URL };
+
+  // Serialize minter sends PER CHAIN: the minter is one EOA per chain, so concurrent seeds on the
+  // same chain would otherwise fetch the same nonce and collide. Different chains have independent
+  // nonces, so they need not block each other. Re-checking the balance inside the lock also stops
+  // two callers from double-seeding the same target.
+  return withLock(`minter:${onDefi ? DEFI_CHAIN_ID : IDENTITY_CHAIN_ID}`, async () => {
+    const balance = await pub.getBalance({ address: target });
+    if (balance >= parseEther(threshold)) return null;
     await ensureMinter();
-    const minter = await getSigner(MINTER_KEY);
+    const minter = await getSigner(MINTER_KEY, signerOpts);
     const hash = await minter.sendTransaction({
       to: target,
-      value: parseEther(IGNIS_GAS_SEED),
+      value: parseEther(seed),
       account: minter.account!,
-      chain: minter.chain,
+      chain: signerOpts.chain,
     });
-    await identityClient.waitForTransactionReceipt({ hash });
+    await pub.waitForTransactionReceipt({ hash });
     return hash;
   });
 }

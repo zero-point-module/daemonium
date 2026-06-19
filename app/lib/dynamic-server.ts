@@ -9,9 +9,9 @@
  * Dynamic's backup via the password). Our store holds only a thin name→address index.
  */
 import "server-only";
-import { DynamicEvmWalletClient } from "@dynamic-labs-wallet/node-evm";
+import { DynamicEvmWalletClient, createAccountAdapter } from "@dynamic-labs-wallet/node-evm";
 import { ThresholdSignatureScheme, type WalletMetadata } from "@dynamic-labs-wallet/node";
-import type { WalletClient, Chain } from "viem";
+import type { WalletClient, Chain, Account } from "viem";
 import { IDENTITY_CHAIN, IDENTITY_CHAIN_ID, IDENTITY_RPC_URL } from "./chain";
 import { getWallet, putWallet, type StoredWallet } from "./wallet-store";
 import { withLock } from "./lock";
@@ -92,11 +92,29 @@ export async function createAgentWallet(
   const password = requireEnv("DAEMON_WALLET_PASSWORD");
 
   // backUpToDynamic:true → Dynamic stores + can recover the key share; we keep no share locally.
-  const result = await client.createWalletAccount({
-    thresholdSignatureScheme: ThresholdSignatureScheme.TWO_OF_TWO,
-    password,
-    backUpToDynamic: true,
-  });
+  let result;
+  try {
+    result = await client.createWalletAccount({
+      thresholdSignatureScheme: ThresholdSignatureScheme.TWO_OF_TWO,
+      password,
+      backUpToDynamic: true,
+    });
+  } catch (err) {
+    // A 401 from /waas/create means DYNAMIC_API_TOKEN authenticated but the resulting session
+    // isn't authorized to create server wallets (e.g. scope "userDataForm"). This is a token/
+    // environment config issue, not a code one — surface it clearly instead of a raw Axios dump.
+    const status = (err as { status?: number; response?: { status?: number } })?.status ??
+      (err as { response?: { status?: number } })?.response?.status;
+    if (status === 401) {
+      throw new Error(
+        "Dynamic rejected server-wallet creation (401). DYNAMIC_API_TOKEN is authenticating but " +
+          "isn't authorized for WaaS — regenerate a Server Wallets API token in the Dynamic " +
+          "dashboard (Developers → API tokens) for this environment, and make sure Server Wallets " +
+          "are enabled and no required user-data form is gating it.",
+      );
+    }
+    throw err;
+  }
 
   const address = result.walletMetadata.accountAddress;
   seedWalletMetadata(address, result.walletMetadata); // sign immediately, pre-propagation
@@ -149,5 +167,24 @@ export async function getSigner(
     chain: opts.chain ?? IDENTITY_CHAIN,
     chainId: opts.chainId ?? IDENTITY_CHAIN_ID,
     rpcUrl: opts.rpcUrl ?? IDENTITY_RPC_URL,
+  });
+}
+
+/**
+ * A viem `Account` backed by the agent's MPC wallet, for wiring the agent in as a ZeroDev
+ * **session-key signer** (`toECDSASigner`). Unlike `getSigner` (a chain-bound `WalletClient` that
+ * signs+broadcasts ordinary txs), this is a chain-agnostic signer used INSIDE UserOp validation:
+ * it signs the UserOp hash via MPC, and ZeroDev/the bundler handle broadcast. `key` is the agent's
+ * ENS name. Shares are still recovered from Dynamic's backup via the password — no local key.
+ */
+export async function getAgentAccount(key: string): Promise<Account> {
+  const wallet = await getWallet(key);
+  if (!wallet) throw new Error(`No wallet for agent "${key}"`);
+  const walletMetadata = await getWalletMetadataForAddress(wallet.address);
+  const client = await getServerClient();
+  return createAccountAdapter({
+    evmClient: client,
+    walletMetadata,
+    password: requireEnv("DAEMON_WALLET_PASSWORD"),
   });
 }

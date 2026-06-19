@@ -13,6 +13,51 @@ from our backend. Every sub-agent Ignis spawns gets its own wallet the same way.
 This is the heart of the project: a free digital entity that holds and uses value needs a
 wallet it actually controls, not a feature bolted onto a human's account.
 
+## Ownership: the user owns the account; the agent is a session key
+
+> _This is the current ownership model. It supersedes the older "the agent's MPC wallet is the
+> on-chain owner" framing — that wallet is now the agent's **session key**, not the owner._
+
+Autonomy is only safe if the **human is the on-chain owner and is accountable**. So each user owns a
+single **ERC-4337 smart account** (a [ZeroDev](https://zerodev.app) **Kernel** account), with their
+**Dynamic embedded wallet** (`primaryWallet`) as the **sudo owner**. That one smart account owns
+**both** layers: **money** on Base and **identity** (ENS subnames + ERC-8004) on Ethereum mainnet.
+It has the **same deterministic address on both chains** (multi-chain ECDSA validator).
+
+Each agent and sub-agent's Dynamic **server (MPC) wallet** is registered on that account as a
+**scoped session key** (a ZeroDev permission validator), **not** an owner. A session key carries
+**on-chain-enforced** policy: allowed target contracts, per-call/native spend caps, an ERC-20 amount
+ceiling, and an expiry. Even a fully compromised backend cannot exceed what the chain enforces, and
+the user can revoke a key at any time.
+
+**The "before-action click" is now a real signature**, with two modes:
+
+| Mode | Who signs the UserOp | When |
+|---|---|---|
+| **Co-sign** (default) | the **user's embedded wallet**, per action | every action, unless an agent has been granted autonomy |
+| **Autonomy** (opt-in) | the **agent's session key**, server-side, within policy | after the user signs a one-time grant scoping that agent (caps/targets/expiry) |
+
+So the user authorizes either each action (a genuine cryptographic approval, not a UI gesture) or a
+bounded, revocable session the agent then operates within. Funds and identity live in **one** place
+the user owns; agents are guests on a leash the user holds.
+
+```
+User's Dynamic embedded wallet (primaryWallet)  ── sudo owner
+        │ owns (same address on mainnet + Base)
+        ▼
+User Kernel Smart Account (ERC-4337, EntryPoint 0.7, Kernel v3.x)
+   ├─ holds funds (Base) + ENS subnames & ERC-8004 NFTs (mainnet)
+   ├─ session key: ignis       → policy: caps / targets / expiry
+   └─ session key: research.*  → tighter policy
+```
+
+**Gas is self-funded:** the minter seeds the smart account with ETH on both chains (no paymaster).
+The smart account pays for its own UserOps; the first L1 UserOp also counterfactually deploys it.
+
+The MPC / server-wallet machinery below is unchanged — it's still how each agent's **session-key
+signer** exists and signs. What changed is *who owns the assets*: the user's smart account, not the
+agent.
+
 ## Why not just use the human's wallet?
 
 A normal dApp flow is: user connects MetaMask → app asks the wallet to sign → user approves in
@@ -68,8 +113,13 @@ So there are **two kinds of wallet** in Daemonium:
 
 | Wallet | Who | Where it lives | Role |
 |---|---|---|---|
-| Embedded wallet | the human | frontend (React SDK) | login, approver, funding source |
-| Server wallet | each agent | backend (node-evm SDK) | the agent's own funds + identity |
+| Embedded wallet | the human | frontend (React SDK) | login + **sudo owner** of the user's smart account; signs co-sign UserOps and session-key grants |
+| Server wallet | each agent | backend (node-evm SDK) | the agent's **session-key signer** on the user's smart account (no longer the on-chain owner) |
+
+The user's assets don't live in either of these directly — they live in the **Kernel smart account**
+the embedded wallet owns (see the ownership section above). `createAccountAdapter`
+(`@dynamic-labs-wallet/node-evm`) turns a server wallet into a viem `Account` so it can be wired in as
+a ZeroDev session-key signer.
 
 ## **Dynamic is the wallet store** (we persist almost nothing)
 
@@ -175,6 +225,14 @@ We chose this **propose/execute split over a private key in the client** _and_ o
 built-in `needsApproval`. Why: the client physically cannot sign (it has no shares), so a
 mis-wired or jailbroken agent still can't move funds — the gate is a hard boundary, not a UX
 affordance. There is exactly one auditable choke point.
+
+**With user-owned smart accounts, the gate is now cryptographic, not just procedural.** In the
+default **co-sign** mode the execute route returns the action's encoded calls for the `executionId`;
+the **user's embedded wallet signs the resulting UserOp** and submits it — the backend cannot move
+funds without that signature. In **autonomy** mode the backend signs with the agent's session key, but
+the smart account enforces the granted policy **on-chain** (caps/targets/expiry), so the agent can
+only act within bounds the user signed for, and reverts otherwise. Either way the per-tx caps above
+still apply as defense in depth.
 
 
 any server SDK with native/WASM bits usually needs `serverExternalPackages` in Next.

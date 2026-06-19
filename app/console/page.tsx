@@ -5,6 +5,7 @@ import { useAccount } from 'wagmi';
 import { explorerAddress } from '../lib/chain';
 import { Console } from '../components/console';
 import { HandleGate } from '../components/handle-gate';
+import { AutonomyControl } from '../components/autonomy-control';
 
 /**
  * Dev panel — Dynamic login, embedded-wallet info, and the agent test console.
@@ -60,6 +61,7 @@ export default function DevConsolePage() {
                 <p className="text-xs text-zinc-500">
                   dæmon: <span className="font-mono text-orange-300">{ensName}</span>
                 </p>
+                <AutonomyControl />
                 <Console />
               </>
             )}

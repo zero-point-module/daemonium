@@ -58,13 +58,22 @@ export async function getIncomingUsdc(
   const latestBlock = await defiClient.getBlockNumber();
   const span = BigInt(9000);
   const start = fromBlock ?? (latestBlock > span ? latestBlock - span : BigInt(0));
-  const logs = await defiClient.getLogs({
-    address: USDC.address,
-    event: TRANSFER_EVENT,
-    args: { to: address },
-    fromBlock: start,
-    toBlock: "latest",
-  });
+  let logs;
+  try {
+    logs = await defiClient.getLogs({
+      address: USDC.address,
+      event: TRANSFER_EVENT,
+      args: { to: address },
+      fromBlock: start,
+      toBlock: "latest",
+    });
+  } catch {
+    // Some free public RPCs (e.g. base-rpc.publicnode.com) refuse eth_getLogs as an "archive"
+    // request needing a paid token. Funding detection is best-effort, so degrade to "no new
+    // transfers" + advance the cursor rather than 500-ing the poll loop. Set BASE_RPC_URL to a
+    // getLogs-capable provider (Alchemy free tier works) to actually see incoming transfers.
+    return { latestBlock, transfers: [] };
+  }
   return {
     latestBlock,
     transfers: logs.map((l) => ({

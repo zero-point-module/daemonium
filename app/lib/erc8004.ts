@@ -8,7 +8,7 @@
  * ABI fragments are hand-pinned from github.com/erc-8004/erc-8004-contracts.
  */
 import "server-only";
-import { parseAbi, parseEventLogs, type Address, type Hash } from "viem";
+import { encodeFunctionData, parseAbi, parseEventLogs, type Address, type Hash, type Hex, type Log } from "viem";
 import { ERC8004 } from "./chain";
 import { identityClient } from "./evm";
 import { getSigner } from "./dynamic-server";
@@ -34,6 +34,31 @@ export async function ownsIdentity(owner: Address): Promise<boolean> {
     args: [owner],
   })) as bigint;
   return balance > BigInt(0);
+}
+
+/** Encode a `register(agentURI)` call for the IdentityRegistry — to run as a UserOp from the
+ *  user's smart account, so the SA (msg.sender) becomes the identity-NFT holder. */
+export function buildRegisterCall(agentURI: string): { to: Address; data: Hex; value: bigint } {
+  return {
+    to: ERC8004.identityRegistry,
+    data: encodeFunctionData({ abi: identityRegistryAbi, functionName: "register", args: [agentURI] }),
+    value: 0n,
+  };
+}
+
+/** Parse the minted agentId from a register tx/UserOp receipt's logs (Registered, else mint
+ *  Transfer). Returns undefined if neither is present. Same logic as registerIdentity, reusable
+ *  for the SA-co-signed path where the client submits and the server reads the receipt by hash. */
+export function parseAgentIdFromLogs(logs: Log[]): string | undefined {
+  const registered = parseEventLogs({ abi: identityRegistryAbi, logs, eventName: "Registered" });
+  let agentId = registered[0]?.args.agentId;
+  if (agentId === undefined) {
+    const mints = parseEventLogs({ abi: identityRegistryAbi, logs, eventName: "Transfer" }).filter(
+      (l) => l.args.from === ZERO,
+    );
+    agentId = mints[0]?.args.tokenId;
+  }
+  return agentId?.toString();
 }
 
 /** Register a new ERC-8004 identity for `signerLabel`, pointing at `agentURI`. */

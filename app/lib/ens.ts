@@ -9,7 +9,7 @@
  * NameWrapper token owner of the parent node, OR an approved operator (setApprovalForAll).
  */
 import "server-only";
-import { parseAbi, namehash, type Address, type Hash } from "viem";
+import { encodeFunctionData, parseAbi, namehash, type Address, type Hash, type Hex } from "viem";
 import { normalize } from "viem/ens";
 import { ENS, AGENT_CARD_TEXT_KEY } from "./chain";
 import { identityClient } from "./evm";
@@ -118,6 +118,20 @@ export async function registerSubname(opts: {
 
   const name = `${label}.${parentName}`;
   return { node: nodeOf(name), name, hash };
+}
+
+/** Encode a `setText(node, "agent-card", uri)` call on the PublicResolver — to run as a UserOp
+ *  from the user's smart account, which now owns the subname node (so it's the authorized caller). */
+export function buildSetAgentCardCall(name: string, uri: string): { to: Address; data: Hex; value: bigint } {
+  return {
+    to: ENS.publicResolver,
+    data: encodeFunctionData({
+      abi: resolverAbi,
+      functionName: "setText",
+      args: [nodeOf(name), AGENT_CARD_TEXT_KEY, uri],
+    }),
+    value: 0n,
+  };
 }
 
 /** Point an ENS name's `agent-card` text record at the given URI. */

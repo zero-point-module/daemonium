@@ -40,7 +40,6 @@ import { getSigner, ensureAgentWallet } from "./dynamic-server";
 import { seedGasIfLow } from "./minter";
 import {
   registerSubname as ensRegisterSubname,
-  setAgentCardRecord,
   subnameExists,
   canManageParent,
 } from "./ens";
@@ -439,8 +438,14 @@ async function spawnSubagent(
     const childAddr = child.address as Address;
     await appendChild(parentKey, childKey);
 
-    // 2. Fund the sub-agent + register its ERC-8004 identity. Independent of ENS.
-    await seedGasIfLow(childAddr);
+    // The user's smart account owns the whole cluster's identity. Inherited from the parent dæmon
+    // (set at provision). A child is a SESSION KEY on that same SA, not an owner.
+    const userSA = parent.ownerSmartAccount as Address | undefined;
+    if (userSA) await updateWallet(childKey, { ownerSmartAccount: userSA, ownerEoa: parent.ownerEoa });
+
+    // 2. Fund + register the sub-agent's ERC-8004 identity (agent-signed; relocating it to the SA
+    //    is a co-signed UserOp). The child's L1 wallet pays its own register gas.
+    await seedGasIfLow(childAddr, { chain: "identity" });
     const uri = agentCardUri(childKey);
     let hash: `0x${string}` | undefined;
     if (!child.agentId && !(await ownsIdentity(childAddr))) {
@@ -449,21 +454,21 @@ async function spawnSubagent(
       hash = r.hash;
     }
 
-    // 3. Nested ENS subname on L1 — the parent dæmon owns its own name, so it mints the child's
-    //    subname itself. Best-effort + decoupled so a gas hiccup never loses the cluster node
-    //    (the wallet + ERC-8004 identity are already done).
+    // 3. Nested ENS subname on L1, owned by the USER'S SMART ACCOUNT. The parent node is now owned
+    //    by the SA, so minting a nested subname requires the SA to sign (a UserOp) — until that
+    //    co-sign path is wired, canManageParent is false for the parent agent and this skips
+    //    cleanly. Best-effort + decoupled so a gas hiccup never loses the cluster node.
     if (ENS_ONCHAIN_MINTING) {
       try {
         const parentAddr = parent.address as Address;
         if (!(await subnameExists(childKey)) && (await canManageParent(parent.ensName, parentAddr))) {
-          await seedGasIfLow(parentAddr); // parent pays to mint the subname
+          await seedGasIfLow(parentAddr, { chain: "identity" }); // signer pays to mint the subname
           const r = await ensRegisterSubname({
             parentName: parent.ensName,
             label,
-            owner: childAddr,
+            owner: userSA ?? childAddr,
             signerLabel: parentKey,
           });
-          await setAgentCardRecord({ name: childKey, uri, signerLabel: childKey });
           hash = r.hash;
         }
       } catch {

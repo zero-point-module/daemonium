@@ -10,12 +10,16 @@ import { useCallback, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { getAuthToken } from "@dynamic-labs/sdk-react-core";
+import { useWalletClient } from "wagmi";
+import type { Address, Hex } from "viem";
+import { coSignAndSubmit, type ConnectedWalletClient } from "./smart-account-client";
 import type {
   DaemonAction,
   DaemonEvent,
   DaemonState,
   ProposalCard,
   ExecuteResponse,
+  PrepareResponse,
 } from "./types";
 
 /** Authorization header carrying the Dynamic session JWT, resolved at request time. */
@@ -42,6 +46,9 @@ export function useDaemon() {
   // After a confirmed action, hold the success/error face through Ignis's spoken
   // reaction so that follow-up turn doesn't snap the flame back to "thinking".
   const reacting = useRef(false);
+
+  // The user's embedded wallet (bridged via wagmi) — the sudo owner that co-signs UserOps.
+  const { data: walletClient } = useWalletClient();
 
   const { messages, sendMessage, status } = useChat({
     transport: new DefaultChatTransport({ api: "/api/agent", headers: authHeaders }),
@@ -87,11 +94,38 @@ export function useDaemon() {
       setProposal(null);
       setState("executing");
       try {
-        const res = (await fetch("/api/daemon/execute", {
+        // 1. Ask the server how this runs: executed server-side, or co-sign here.
+        const prep = (await fetch("/api/daemon/execute", {
           method: "POST",
           headers: { "content-type": "application/json", ...authHeaders() },
           body: JSON.stringify({ executionId }),
-        }).then((r) => r.json())) as ExecuteResponse;
+        }).then((r) => r.json())) as PrepareResponse;
+
+        let res: ExecuteResponse;
+        if (prep.mode === "server") {
+          // Spawn, or an autonomous session key already signed + broadcast it.
+          res = { ok: prep.ok, hash: prep.hash, error: prep.error, chainId: prep.chainId };
+        } else {
+          // 2. Co-sign: the user's embedded wallet signs the UserOp built from the stored proposal.
+          if (!walletClient) throw new Error("Connect your wallet to confirm this action.");
+          const calls = prep.calls.map((c) => ({
+            to: c.to as Address,
+            data: c.data as Hex,
+            value: BigInt(c.value),
+          }));
+          const hash = await coSignAndSubmit({
+            walletClient: walletClient as ConnectedWalletClient,
+            calls,
+            chainId: prep.chainId,
+          });
+          // 3. Record + consume the proposal now that the UserOp landed.
+          res = (await fetch("/api/daemon/execute/complete", {
+            method: "POST",
+            headers: { "content-type": "application/json", ...authHeaders() },
+            body: JSON.stringify({ executionId, hash, ok: true, chainId: prep.chainId }),
+          }).then((r) => r.json())) as ExecuteResponse;
+          if (!res.hash) res.hash = hash;
+        }
 
         setTxResult({ ...res, executionId });
         setState(res.ok ? "success" : "error");
@@ -112,7 +146,7 @@ export function useDaemon() {
         setExecutingAction(null); // wait's over — the outcome (txResult) takes the stage
       }
     },
-    [sendMessage],
+    [sendMessage, walletClient],
   );
 
   const dismissProposal = useCallback(() => setProposal(null), []);
