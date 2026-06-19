@@ -26,8 +26,9 @@ import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants";
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator";
 import { toECDSASigner } from "@zerodev/permissions/signers";
 import { toPermissionValidator, serializePermissionAccount } from "@zerodev/permissions";
-import { toCallPolicy, toGasPolicy, toTimestampPolicy, CallPolicyVersion } from "@zerodev/permissions/policies";
+import { toSudoPolicy, toGasPolicy, toTimestampPolicy } from "@zerodev/permissions/policies";
 import { KERNEL_ACCOUNT_INDEX } from "./chain";
+import { userOpFees } from "./aa-gas";
 
 const ENTRY_POINT = getEntryPoint("0.7");
 const KERNEL_VERSION = KERNEL_V3_1;
@@ -75,13 +76,10 @@ async function sudoKernelClient(walletClient: ConnectedWalletClient, chainId: nu
     chain,
     bundlerTransport: http(bundlerRpc),
     client: publicClient,
-    // Default uses ZeroDev's proprietary `zd_getUserOperationGasPrice`, which non-ZeroDev bundlers
-    // (Pimlico, Alchemy) don't implement. Use standard EIP-1559 chain pricing so any bundler works.
+    // Ask the bundler for its required gas price (Pimlico enforces a minimum); falls back to chain
+    // EIP-1559. Avoids ZeroDev's default `zd_getUserOperationGasPrice`, which Pimlico/Alchemy lack.
     userOperation: {
-      estimateFeesPerGas: async () => {
-        const { maxFeePerGas, maxPriorityFeePerGas } = await publicClient.estimateFeesPerGas();
-        return { maxFeePerGas, maxPriorityFeePerGas };
-      },
+      estimateFeesPerGas: async ({ bundlerClient }) => userOpFees(bundlerClient, publicClient),
     },
   });
 }
@@ -113,10 +111,6 @@ export async function coSignAndSubmit(opts: {
 }
 
 export interface GrantPolicyInput {
-  /** Contracts the agent's session key may call (the on-chain allowlist). */
-  targets: Address[];
-  /** Native-ETH spend cap per call, in wei (0 = no native value allowed). */
-  maxNativeWei?: bigint;
   /** Gas allowance the session key may consume, in wei. */
   gasAllowanceWei?: bigint;
   /** Unix seconds the grant is valid until (on-chain expiry). */
@@ -124,11 +118,13 @@ export interface GrantPolicyInput {
 }
 
 /**
- * GRANT AUTONOMY: the user's embedded wallet signs a ZeroDev permission account that authorizes the
- * agent's session-key signer (`sessionSignerAddress`) under on-chain policy (target allowlist,
- * native cap, gas cap, expiry). Returns the serialized approval blob to hand to the server, which
- * rebuilds it with the agent's real MPC signer to act autonomously within these limits. The user's
- * key signs the enable approval here; the agent's key never touches the browser.
+ * GRANT AUTONOMY (broad / option C): the user's embedded wallet signs a ZeroDev permission account
+ * that authorizes the agent's session-key signer to act on the smart account — including native ETH
+ * sends to ANY recipient — bounded ON-CHAIN by expiry + a gas allowance. We use a sudo policy
+ * because CallPolicy can't express "any recipient" (no wildcard target), and native ETH transfers
+ * target the recipient directly. Per-tx value caps (ETH_SEND_CAP / USDC_SEND_CAP / …) are still
+ * enforced server-side in action-calls as defense in depth, and the grant is revocable. Returns the
+ * serialized approval blob; the agent's MPC signer is supplied server-side at execute time.
  */
 export async function createSessionApproval(opts: {
   walletClient: ConnectedWalletClient;
@@ -147,15 +143,10 @@ export async function createSessionApproval(opts: {
   // server-side at execute time (deserializePermissionAccount).
   const emptySigner = await toECDSASigner({ signer: addressToEmptyAccount(opts.sessionSignerAddress) });
 
+  // Sudo (any call, incl. native ETH to any address) AND a gas cap AND an expiry — all must pass.
   const policies = [
-    toCallPolicy({
-      policyVersion: CallPolicyVersion.V0_0_5,
-      permissions: opts.policy.targets.map((target) => ({
-        target,
-        valueLimit: opts.policy.maxNativeWei ?? 0n,
-      })),
-    }),
-    toGasPolicy({ allowed: opts.policy.gasAllowanceWei ?? parseEther("0.02") }),
+    toSudoPolicy({}),
+    toGasPolicy({ allowed: opts.policy.gasAllowanceWei ?? parseEther("0.05") }),
     ...(opts.policy.validUntil ? [toTimestampPolicy({ validUntil: opts.policy.validUntil })] : []),
   ];
 

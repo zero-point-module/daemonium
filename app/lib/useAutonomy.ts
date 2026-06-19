@@ -9,11 +9,9 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { useWalletClient } from "wagmi";
-import { base } from "viem/chains";
 import { parseEther, type Address } from "viem";
 import { authHeaders } from "./daemon-client";
 import { createSessionApproval, type ConnectedWalletClient } from "./smart-account-client";
-import { VALUE_POLICY_TARGETS } from "./chain";
 
 export interface AutonomyState {
   active: boolean;
@@ -27,7 +25,9 @@ export interface AutonomyState {
   refresh: () => Promise<void>;
 }
 
-export function useAutonomy(): AutonomyState {
+/** Autonomy grant state for ONE chain. Grants are per-chain, so render one row per chain you want
+ *  the dæmon to act on (e.g. Base for DeFi, Ethereum for L1 ETH sends). */
+export function useAutonomy(chainId: number): AutonomyState {
   const { data: walletClient } = useWalletClient();
   const [active, setActive] = useState(false);
   const [agentKey, setAgentKey] = useState<string | null>(null);
@@ -38,7 +38,9 @@ export function useAutonomy(): AutonomyState {
 
   const refresh = useCallback(async () => {
     try {
-      const r = await fetch("/api/daemon/grant", { headers: authHeaders() }).then((x) => x.json());
+      const r = await fetch(`/api/daemon/grant?chainId=${chainId}`, { headers: authHeaders() }).then(
+        (x) => x.json(),
+      );
       if (r && !r.error) {
         setActive(Boolean(r.active));
         setAgentKey(r.agentKey ?? null);
@@ -48,7 +50,7 @@ export function useAutonomy(): AutonomyState {
     } catch {
       /* status fetch is best-effort */
     }
-  }, []);
+  }, [chainId]);
 
   useEffect(() => {
     void refresh();
@@ -67,26 +69,20 @@ export function useAutonomy(): AutonomyState {
       setBusy(true);
       setError(null);
       try {
-        const targets = Object.values(VALUE_POLICY_TARGETS) as Address[];
         const validUntil = Math.floor(Date.now() / 1000) + (opts?.days ?? 7) * 86_400;
         const approvalBlob = await createSessionApproval({
           walletClient: walletClient as ConnectedWalletClient,
-          chainId: base.id,
+          chainId,
           sessionSignerAddress: sessionSignerAddress as Address,
-          policy: {
-            targets,
-            maxNativeWei: parseEther("0.01"),
-            gasAllowanceWei: parseEther("0.02"),
-            validUntil,
-          },
+          policy: { gasAllowanceWei: parseEther("0.05"), validUntil },
         });
         await fetch("/api/daemon/grant", {
           method: "POST",
           headers: { "content-type": "application/json", ...authHeaders() },
           body: JSON.stringify({
             approvalBlob,
-            chainId: base.id,
-            policy: { maxUsdc: opts?.maxUsdc, targets, validUntil },
+            chainId,
+            policy: { maxUsdc: opts?.maxUsdc, validUntil },
           }),
         });
         await refresh();
@@ -96,7 +92,7 @@ export function useAutonomy(): AutonomyState {
         setBusy(false);
       }
     },
-    [walletClient, sessionSignerAddress, refresh],
+    [walletClient, sessionSignerAddress, chainId, refresh],
   );
 
   const revoke = useCallback(async () => {
@@ -106,7 +102,7 @@ export function useAutonomy(): AutonomyState {
       await fetch("/api/daemon/grant", {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ revoke: true }),
+        body: JSON.stringify({ revoke: true, chainId }),
       });
       await refresh();
     } catch (e) {
@@ -114,7 +110,7 @@ export function useAutonomy(): AutonomyState {
     } finally {
       setBusy(false);
     }
-  }, [refresh]);
+  }, [chainId, refresh]);
 
   return { active, agentKey, sessionSignerAddress, busy, error, policy, grant, revoke, refresh };
 }

@@ -25,6 +25,7 @@ import { deserializePermissionAccount } from "@zerodev/permissions";
 import { IDENTITY_CHAIN_ID, DEFI_CHAIN_ID, KERNEL_ACCOUNT_INDEX } from "./chain";
 import { defiClient, identityClient } from "./evm";
 import { getAgentAccount } from "./dynamic-server";
+import { userOpFees } from "./aa-gas";
 
 /** EntryPoint + Kernel version this app standardizes on (kept here, not in chain.ts, so the heavy
  *  @zerodev/sdk never leaks into a client bundle that imports chain.ts data). */
@@ -161,13 +162,10 @@ export async function submitWithSessionKey(opts: {
     chain: cfg.viemChain,
     bundlerTransport: http(bundlerRpc),
     client: cfg.publicClient,
-    // Standard EIP-1559 pricing — avoids ZeroDev's proprietary `zd_getUserOperationGasPrice` so
-    // non-ZeroDev bundlers (Pimlico, Alchemy) work.
+    // Ask the bundler for its required gas price (Pimlico enforces a minimum); falls back to chain
+    // EIP-1559. Avoids ZeroDev's default `zd_getUserOperationGasPrice`, which Pimlico/Alchemy lack.
     userOperation: {
-      estimateFeesPerGas: async () => {
-        const { maxFeePerGas, maxPriorityFeePerGas } = await cfg.publicClient.estimateFeesPerGas();
-        return { maxFeePerGas, maxPriorityFeePerGas };
-      },
+      estimateFeesPerGas: async ({ bundlerClient }) => userOpFees(bundlerClient, cfg.publicClient),
     },
   });
 
