@@ -344,7 +344,7 @@ export function buildTools({
         "sessions. Runs now; it's your own memory, so no confirmation is needed. Use it sparingly, " +
         "for things that genuinely matter, not every passing detail.",
       inputSchema: z.object({
-        text: z.string().describe("The thing to remember, in one plain sentence."),
+        text: z.string().max(500).describe("The thing to remember, in one plain sentence."),
         kind: z.string().optional().describe('Loose category, e.g. "preference", "fact", "event".'),
       }),
       execute: async ({ text, kind }) => {

@@ -17,6 +17,11 @@ import { withLock } from "./lock";
 
 const NS = "memory";
 
+// Scaffold bounds so the single-array store can't grow without limit: keep only the most recent
+// MAX_ITEMS memories, and cap each one to MAX_TEXT chars (a memory is a sentence, not a document).
+const MAX_ITEMS = 200;
+const MAX_TEXT = 500;
+
 /** One remembered thing. Keep it small and human-readable. */
 export interface MemoryItem {
   /** ISO timestamp when it was remembered. */
@@ -35,8 +40,9 @@ export interface MemoryItem {
 export function remember(userId: string, item: { kind: string; text: string }): Promise<void> {
   return withLock(`memory:${userId}`, async () => {
     const log = (await kvGet<MemoryItem[]>(NS, userId)) ?? [];
-    log.push({ at: new Date().toISOString(), kind: item.kind, text: item.text });
-    await kvSet(NS, userId, log);
+    log.push({ at: new Date().toISOString(), kind: item.kind, text: item.text.slice(0, MAX_TEXT) });
+    // Keep only the most recent MAX_ITEMS so the stored blob — and every future recall — stay bounded.
+    await kvSet(NS, userId, log.length > MAX_ITEMS ? log.slice(-MAX_ITEMS) : log);
   });
 }
 
@@ -51,6 +57,7 @@ export async function recall(
   opts: { query?: string; limit?: number } = {},
 ): Promise<MemoryItem[]> {
   const { query, limit = 10 } = opts;
+  if (limit <= 0) return []; // guard: slice(-0) would otherwise return the WHOLE array
   const log = (await kvGet<MemoryItem[]>(NS, userId)) ?? [];
   const matched = query
     ? log.filter((m) => m.text.toLowerCase().includes(query.toLowerCase()))

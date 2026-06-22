@@ -14,6 +14,9 @@ import "server-only";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { AGENT_MODEL } from "./chain";
+import { createLogger } from "./log";
+
+const log = createLogger("shield");
 
 export type Verdict = "keep" | "flag" | "drop";
 
@@ -58,14 +61,24 @@ Give 1–4 short, plain reasons. Be skeptical; when in doubt, prefer "flag" over
 
 /**
  * Judge one item. v0 = a single Claude call against the rubric, returning structured output.
- * Throws only on an infra/model failure — a caller can treat a throw as "flag" (fail safe, surface it).
+ * Fail-safe: if the model errors or returns something off-schema, we SURFACE the item ("flag")
+ * rather than silently keeping or dropping it — a shield should never fail closed on a real item.
  */
 export async function judge(item: ShieldItem): Promise<ShieldVerdict> {
-  const { object } = await generateObject({
-    model: AGENT_MODEL,
-    schema,
-    system: RUBRIC,
-    prompt: `kind: ${item.kind}\nsource: ${item.source ?? "(unknown)"}\n\n${item.text}`,
-  });
-  return object;
+  try {
+    const { object } = await generateObject({
+      model: AGENT_MODEL,
+      schema,
+      system: RUBRIC,
+      prompt: `kind: ${item.kind}\nsource: ${item.source ?? "(unknown)"}\n\n${item.text}`,
+    });
+    return object;
+  } catch (err) {
+    log.error("judge failed; flagging the item to be safe", err);
+    return {
+      verdict: "flag",
+      score: 50,
+      reasons: ["Couldn't judge this confidently — surfaced to be safe."],
+    };
+  }
 }
