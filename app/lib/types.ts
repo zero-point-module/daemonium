@@ -27,19 +27,17 @@ export type DaemonAction =
   | "send_usdc"
   | "send_eth"
   | "swap"
-  | "spawn_subagent"
-  | "lifi_zap"
-  | "lifi_bridge";
+  | "spawn_subagent";
 
 /** Per-action detail payloads shown on the confirm card (human-readable). */
-export interface SendUsdcDetails {
+interface SendUsdcDetails {
   to: string;
   /** Whole USDC amount as a string, e.g. "1.5". */
   amount: string;
   /** Optional resolved ENS name for `to`. */
   toEns?: string;
 }
-export interface SendEthDetails {
+interface SendEthDetails {
   to: string;
   /** ETH amount as a string, e.g. "0.01". */
   amount: string;
@@ -50,7 +48,7 @@ export interface SendEthDetails {
   /** Display label for that chain, e.g. "Ethereum" or "Base". */
   chain: string;
 }
-export interface SwapDetails {
+interface SwapDetails {
   /** Token symbol the agent swaps FROM (e.g. "WETH"), on the swap chain. */
   fromSymbol: string;
   /** Token symbol the agent swaps TO (e.g. "ETH"). */
@@ -67,35 +65,12 @@ export interface SpawnSubagentDetails {
   parentKey: string;
   purpose: string;
 }
-export interface LifiZapDetails {
-  /** Input token symbol on Base (e.g. "USDC" or "WETH"); swapped to USDC then zapped if needed. */
-  fromSymbol: string;
-  /** Human amount of the from-token, e.g. "3". */
-  amount: string;
-  /** Vault key (see LIFI_VAULTS in chain.ts), e.g. "AAVE_USDC". */
-  vault: string;
-  /** Human-readable vault label for the confirm card, e.g. "Aave aBasUSDC". */
-  vaultLabel: string;
-}
-export interface LifiBridgeDetails {
-  /** Token symbol to bridge (e.g. "USDC"). */
-  token: string;
-  /** Human amount, e.g. "5". */
-  amount: string;
-  fromChainId: number;
-  toChainId: number;
-  /** Display names for the confirm card, e.g. "Arbitrum" → "Base". */
-  fromChain: string;
-  toChain: string;
-}
 
 export type ProposalDetails =
   | ({ action: "send_usdc" } & SendUsdcDetails)
   | ({ action: "send_eth" } & SendEthDetails)
   | ({ action: "swap" } & SwapDetails)
-  | ({ action: "spawn_subagent" } & SpawnSubagentDetails)
-  | ({ action: "lifi_zap" } & LifiZapDetails)
-  | ({ action: "lifi_bridge" } & LifiBridgeDetails);
+  | ({ action: "spawn_subagent" } & SpawnSubagentDetails);
 
 /** A pending action awaiting human confirmation. */
 export interface ProposalCard {
@@ -107,22 +82,6 @@ export interface ProposalCard {
   /** One-line human summary, e.g. "Send 1 USDC to research.ignis.daemonium.eth". */
   summary: string;
   details: ProposalDetails;
-}
-
-/** Recursive identity tree. Ignis is the root; sub-agents nest under it. */
-export interface DaemonIdentity {
-  /** Short handle, e.g. "ignis". */
-  label: string;
-  /** ENS name, e.g. "ignis.daemonium.eth". */
-  ensName: string;
-  /** The agent's own server-wallet address — the agent *is* this wallet. */
-  address: string;
-  /** ERC-8004 token id, once registered. */
-  agentId?: string;
-  /** URL serving the ERC-8004 agent card JSON. */
-  agentCardUri?: string;
-  parent?: string; // parent label
-  children: string[]; // child labels
 }
 
 /**
@@ -172,13 +131,13 @@ export interface ExecuteResponse {
   ok: boolean;
   hash?: string;
   error?: string;
-  /** Chain id the tx ran on, so the UI links to the right block explorer (Base vs L1 vs bridge src). */
+  /** Chain id the tx ran on, so the UI links to the right block explorer (Base vs L1). */
   chainId?: number;
 }
 
 /** One contract call in a UserOp the user's smart account will run. `value` is a decimal wei string
  *  (JSON-safe; the client parses it to bigint). */
-export interface PreparedCall {
+interface PreparedCall {
   to: string;
   data: string;
   value: string;

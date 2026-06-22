@@ -1,15 +1,14 @@
 /**
- * Dynamic Swap API client (REST). Stateless quote endpoint that returns a route + an
- * `signingPayload` we sign with the agent's server wallet. We only need /swap/quote for
- * same-chain swaps (the tx receipt confirms completion; /swap/status is for cross-chain).
+ * Dynamic Swap API client (REST). Stateless quote endpoint that returns a route + a
+ * `signingPayload` that gets executed on the user's smart account (see action-calls.ts) — never
+ * the agent's own wallet. We only need /swap/quote for same-chain swaps (the tx receipt confirms
+ * completion; /swap/status is for cross-chain).
  *
- * Verified working on Base Sepolia (84532) with our env + Bearer auth, despite the docs saying
- * "mainnet only". Quote shape confirmed empirically (signingPayload nests evmApproval +
- * evmTransaction).
+ * Quote shape confirmed empirically: signingPayload nests evmApproval + evmTransaction.
  */
 import "server-only";
 import type { Address } from "viem";
-import { SWAP_API_BASE, SWAP_CHAIN_NAME, SWAP_CHAIN_ID } from "./chain";
+import { SWAP_API_BASE, SWAP_CHAIN_NAME, DEFI_CHAIN_ID } from "./chain";
 
 function env(name: string): string {
   const v = process.env[name];
@@ -31,8 +30,8 @@ export interface SwapQuote {
 }
 
 /**
- * Get a same-chain swap quote on the swap chain (Base Sepolia). Exactly one of fromAmount /
- * toAmount; we use exact-in (fromAmount, smallest units). Sends Bearer auth defensively.
+ * Get a same-chain swap quote on the swap chain (Base mainnet, DEFI_CHAIN_ID). Exactly one of
+ * fromAmount / toAmount; we use exact-in (fromAmount, smallest units). Sends Bearer auth defensively.
  */
 export async function getSwapQuote(opts: {
   account: Address;
@@ -45,14 +44,14 @@ export async function getSwapQuote(opts: {
     from: {
       address: opts.account,
       chainName: SWAP_CHAIN_NAME,
-      chainId: String(SWAP_CHAIN_ID),
+      chainId: String(DEFI_CHAIN_ID),
       tokenAddress: opts.fromToken,
       amount: opts.fromAmount,
     },
     to: {
       address: opts.account,
       chainName: SWAP_CHAIN_NAME,
-      chainId: String(SWAP_CHAIN_ID),
+      chainId: String(DEFI_CHAIN_ID),
       tokenAddress: opts.toToken,
     },
     slippage: opts.slippage ?? 0.01,

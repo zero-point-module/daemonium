@@ -5,7 +5,7 @@
  *
  * Two clients for the hybrid topology:
  *   • identityClient → Ethereum mainnet (ENS resolution, ERC-8004 reads, identity receipts).
- *   • defiClient     → Base mainnet (USDC/ETH balances, swap/LI.FI/send receipts, USDC logs).
+ *   • defiClient     → Base mainnet (USDC/ETH balances, swap/send receipts, USDC logs).
  */
 import "server-only";
 import {
@@ -29,7 +29,7 @@ export const identityClient = createPublicClient({
   transport: http(IDENTITY_RPC_URL),
 });
 
-/** Base mainnet — DeFi / value layer (USDC, swaps, LI.FI, sends). */
+/** Base mainnet — DeFi / value layer (USDC, swaps, sends). */
 export const defiClient = createPublicClient({
   chain: DEFI_CHAIN,
   transport: http(DEFI_RPC_URL),

@@ -25,7 +25,7 @@ function requireEnv(name: string): string {
 let clientPromise: Promise<DynamicEvmWalletClient> | null = null;
 
 /** Authenticated Dynamic client, memoized for the process lifetime. */
-export function getServerClient(): Promise<DynamicEvmWalletClient> {
+function getServerClient(): Promise<DynamicEvmWalletClient> {
   if (!clientPromise) {
     clientPromise = (async () => {
       const client = new DynamicEvmWalletClient({
@@ -70,7 +70,7 @@ async function refreshWalletMetadata(): Promise<void> {
 }
 
 /** Signable `walletMetadata` for an address, reconstructed from Dynamic (cached per process). */
-export async function getWalletMetadataForAddress(address: string): Promise<WalletMetadata> {
+async function getWalletMetadataForAddress(address: string): Promise<WalletMetadata> {
   const key = address.toLowerCase();
   if (!metaCache.has(key)) await refreshWalletMetadata();
   const meta = metaCache.get(key);
@@ -84,7 +84,7 @@ export async function getWalletMetadataForAddress(address: string): Promise<Wall
  * index); the signable metadata is seeded into the in-process cache and otherwise comes from
  * Dynamic.
  */
-export async function createAgentWallet(
+async function createAgentWallet(
   ensName: string,
   opts: { parentEnsName?: string } = {},
 ): Promise<StoredWallet> {
@@ -151,7 +151,7 @@ export function ensureAgentWallet(
  * the SDK recovers the key share from Dynamic's backup (one round-trip per sign — no local share
  * storage). writeContract/sendTransaction on this client sign via MPC AND broadcast. Defaults to
  * the IDENTITY chain (Ethereum mainnet — ENS/ERC-8004); pass `opts` to target the DeFi chain
- * (Base mainnet for sends/swaps/LI.FI). `key` is the agent's ENS name.
+ * (Base mainnet for sends/swaps). `key` is the agent's ENS name.
  */
 export async function getSigner(
   key: string,

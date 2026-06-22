@@ -1,5 +1,5 @@
 /**
- * Confirmed-proposal execution. Value actions (send/swap/zap/bridge) NO LONGER run here — they
+ * Confirmed-proposal execution. Value actions (send/swap) NO LONGER run here — they
  * execute on the USER'S smart account via the co-sign or session-key path (see app/lib/action-calls.ts
  * + /api/daemon/execute). The only thing this module still executes is `spawn_subagent` (identity
  * provisioning on Ethereum L1, which moves no user funds). Keeping value execution out of here is

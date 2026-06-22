@@ -23,8 +23,6 @@ const schema = z.object({
   MAINNET_RPC_URL: z.string().optional(), //   identity layer (Ethereum L1) RPC
   BASE_RPC_URL: z.string().optional(), //       DeFi layer (Base mainnet) RPC
   REDIS_URL: z.string().optional(), //          KV store (Vercel KV); falls back to a local file
-  LIFI_API_KEY: z.string().optional(), //       LI.FI Composer + REST (the lifi_* tools)
-  LIFI_COMPOSER_BASE_URL: z.string().optional(), // override the hackathon Composer endpoint
   ENS_ONCHAIN_MINTING: z.string().optional(), // "false" to disable L1 subname minting
   ENS_PARENT_NAME: z.string().optional(),
   APP_BASE_URL: z.string().optional(),

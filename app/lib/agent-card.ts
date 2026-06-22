@@ -8,7 +8,7 @@ import "server-only";
 import { ERC8004_REGISTRATION_ID, agentCardUri } from "./chain";
 import type { StoredWallet } from "./wallet-store";
 import type { AgentCard } from "./types";
-import { CHAIN_ID } from "./chain";
+import { IDENTITY_CHAIN_ID } from "./chain";
 
 export function buildAgentCard(w: StoredWallet): AgentCard {
   return {
@@ -21,7 +21,7 @@ export function buildAgentCard(w: StoredWallet): AgentCard {
     image: `${agentCardUri(w.label).replace("/api/agent-card/", "/")}.png`,
     services: [
       { name: "ENS", endpoint: w.ensName ?? "", version: "v1" },
-      { name: "agentWallet", endpoint: `eip155:${CHAIN_ID}:${w.address}` },
+      { name: "agentWallet", endpoint: `eip155:${IDENTITY_CHAIN_ID}:${w.address}` },
     ].filter((s) => s.endpoint),
     x402Support: false,
     active: true,

@@ -5,13 +5,13 @@
  *     subname cluster, and its ERC-8004 NFT live here. Ethereum L1 still runs ENS v1 with a
  *     LIVE NameWrapper, so `setSubnodeRecord` subname minting actually works (unlike Sepolia,
  *     which froze v1 in its v2 migration). This is what makes the on-chain cluster real.
- *   • DeFi / value layer → Base mainnet (chainId 8453). The same MPC address holds USDC + ETH
- *     and runs all value ops (send_usdc / send_eth / swap / LI.FI) where gas is cheap and both
- *     Dynamic Swap and LI.FI Composer are native.
+ *   • DeFi / value layer → Base mainnet (chainId 8453). The user's smart account holds USDC + ETH
+ *     and runs all value ops (send_usdc / send_eth / swap) where gas is cheap and Dynamic Swap
+ *     is native; the agent's MPC wallet is only a scoped session-key signer, never the fund owner.
  *
- * The Dynamic MPC address is identical on every EVM chain, so one wallet spans both layers;
- * `getSigner` takes a per-call chain override. Every address here was verified against a
- * primary source during planning. Keep this file the single source of truth.
+ * Both the smart account and the Dynamic MPC signer address are identical on every EVM chain, so
+ * one identity spans both layers; `getSigner` takes a per-call chain override. Every address here
+ * was verified against a primary source during planning. Keep this file the single source of truth.
  */
 import { mainnet, base } from "viem/chains";
 import type { Address } from "viem";
@@ -30,24 +30,20 @@ export const DEFI_CHAIN_ID = base.id; // 8453
 export const DEFI_RPC_URL =
   process.env.BASE_RPC_URL ?? "https://base-rpc.publicnode.com";
 
-/** Back-compat aliases: the agent's "home" chain (where its identity lives) = the identity chain. */
-export const CHAIN = IDENTITY_CHAIN;
-export const CHAIN_ID = IDENTITY_CHAIN_ID;
-
 /** USDC on Base mainnet (Circle-native USDC, 6 decimals). The DeFi layer's USDC. */
 export const USDC: { address: Address; decimals: number } = {
   address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   decimals: 6,
 };
 
-/** USDC on Ethereum mainnet (the identity chain) — for cross-chain balance reads + bridging. */
+/** USDC on Ethereum mainnet (the identity chain) — for cross-chain balance reads. */
 export const USDC_MAINNET: Address = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 
 /**
  * ENS v1 on Ethereum mainnet — LIVE. `NameWrapper.setSubnodeRecord` works here today (the v2
  * rewrite is announced for mainnet but not yet deployed, and won't freeze v1 on day one). This
  * is the real subname-cluster path. The parent `daemonium.eth` must be registered + wrapped on
- * L1 and the minter approved (NameWrapper.setApprovalForAll) — see docs/ens.md.
+ * L1 and the minter approved (NameWrapper.setApprovalForAll).
  */
 export const ENS = {
   registry: "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e" as Address,
@@ -93,8 +89,6 @@ export const NATIVE_SEND_CHAINS: Record<string, { chainId: number; label: string
 
 /* ───────────────────────── Dynamic Swap — Base mainnet ───────────────────────── */
 export const SWAP_API_BASE = "https://app.dynamicauth.com/api/v0";
-export const SWAP_CHAIN = DEFI_CHAIN;
-export const SWAP_CHAIN_ID = DEFI_CHAIN_ID; // 8453
 export const SWAP_CHAIN_NAME = "EVM"; // Dynamic's chainName for EVM (same on mainnet)
 /** Tokens the agent can name in a swap on Base mainnet. */
 export const SWAP_TOKENS: Record<string, { address: Address; decimals: number }> = {
@@ -104,27 +98,6 @@ export const SWAP_TOKENS: Record<string, { address: Address; decimals: number }>
 };
 /** Notional USD cap per swap (defense in depth), read from the quote's amountUSD. */
 export const SWAP_CAP_USD = 25;
-
-/* ───────────────────────── LI.FI Composer — Base mainnet ───────────────────────── */
-export const LIFI_CHAIN = DEFI_CHAIN;
-export const LIFI_CHAIN_ID = DEFI_CHAIN_ID; // 8453
-export const LIFI_RPC_URL = DEFI_RPC_URL;
-/** Hackathon Composer endpoint (production + extra features). Default https://composer.li.quest. */
-export const LIFI_COMPOSER_BASE_URL =
-  process.env.LIFI_COMPOSER_BASE_URL ?? "https://ethglobal-composer.li.quest";
-/** LI.FI public REST API (bridge quote + cross-chain status polling). */
-export const LIFI_REST_BASE = "https://li.quest/v1";
-/** Notional USD cap per LI.FI flow/bridge (read from the compile priceImpact / quote). */
-export const LIFI_CAP_USD = 10;
-/**
- * Zap targets for the swap-and-zap demo (Base mainnet). Default is Aave V3 Base's aUSDC receipt
- * token. Confirm valid vault tokens against LI.FI's zap-pack discovery / `/compose/manifest`
- * before a live run; the executor surfaces a compile error if a vault isn't routable.
- */
-export const LIFI_VAULTS: Record<string, { address: Address; label: string }> = {
-  AAVE_USDC: { address: "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB", label: "Aave aBasUSDC" },
-};
-export const LIFI_DEFAULT_VAULT = "AAVE_USDC";
 
 /**
  * Claude model (via Vercel AI Gateway) used by Ignis and its sub-agents. Env-tunable so the
@@ -137,7 +110,6 @@ export const AGENT_MODEL = process.env.AGENT_MODEL ?? "anthropic/claude-sonnet-4
  * SMART ACCOUNT (not the agent): self-funded UserOps pay their own gas, and the FIRST L1 UserOp
  * also counterfactually DEPLOYS the account, so the dæmon seed is higher than a plain register.
  * Tune for live gas. */
-export const SUBAGENT_GAS_SEED = "0.0002"; // ETH seeded for a sub-agent's identity UserOps
 export const IGNIS_GAS_SEED = "0.0003"; // ETH seeded to a user's smart account (deploy + register + setText)
 export const GAS_SEED_THRESHOLD = "0.0015"; // seed only if balance is below this
 /** ETH seeded to the smart account on the DeFi chain (Base) so value UserOps can pay their gas. */
@@ -151,22 +123,9 @@ export const DEFI_GAS_SEED_THRESHOLD = "0.0004";
  * @zerodev/sdk out of any client bundle that imports this data-only module. */
 /** Salt/index used when deriving the Kernel account address; 0 = the user's primary account. */
 export const KERNEL_ACCOUNT_INDEX = 0n;
-/** Bundler RPC endpoints (server). UserOps are submitted here; unset → a clear error at use time. */
-export const BUNDLER_RPC_MAINNET = process.env.BUNDLER_RPC_MAINNET;
-export const BUNDLER_RPC_BASE = process.env.BUNDLER_RPC_BASE;
-
-/** Contracts a value-layer session key may call (the on-chain policy allowlist for autonomy).
- * USDC for transfers; the Base Uniswap UniversalRouter + Permit2 cover the swap path. LI.FI's
- * diamond covers zap/bridge. Refined per policy in smart-account.ts. */
-export const VALUE_POLICY_TARGETS = {
-  usdc: USDC.address,
-  universalRouter: "0x6fF5693b99212Da76ad316178A184AB56D299b43" as Address, // Base UniversalRouter
-  permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3" as Address,
-  lifiDiamond: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE" as Address, // LI.FI diamond (canonical)
-} as const;
 
 /** Public base URL of this app. Set APP_BASE_URL on deploy so agent-card URIs resolve. */
-export const APP_BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:3000";
+const APP_BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:3000";
 
 /** Where an agent's ERC-8004 card JSON is served. Used as the agentURI + ENS text record. */
 export const agentCardUri = (label: string) => `${APP_BASE_URL}/api/agent-card/${label}`;
@@ -174,14 +133,14 @@ export const agentCardUri = (label: string) => `${APP_BASE_URL}/api/agent-card/$
 /** ENS text-record key we use to point at the agent card (our convention, not ENS-standard). */
 export const AGENT_CARD_TEXT_KEY = "agent-card";
 
-/* Explorers. Identity (ENS/ERC-8004/wallet) on Ethereum L1 → etherscan; value (sends/swaps/LI.FI)
+/* Explorers. Identity (ENS/ERC-8004/wallet) on Ethereum L1 → etherscan; value (sends/swaps)
  * on Base → basescan. */
 export const explorerAddress = (addr: string) => `https://etherscan.io/address/${addr}`;
 export const defiExplorerAddress = (addr: string) => `https://basescan.org/address/${addr}`;
 
 /**
  * Chain-aware explorer lookup — so a tx links to the chain it ACTUALLY ran on: identity/spawn on
- * L1 → Etherscan, sends/swaps/zaps on Base → Basescan, a bridge's source on its own chain.
+ * L1 → Etherscan, sends/swaps on Base → Basescan.
  */
 const EXPLORERS: Record<number, { name: string; base: string }> = {
   1: { name: "Etherscan", base: "https://etherscan.io" },

@@ -12,9 +12,8 @@ import { z } from "zod";
 import { erc20Abi, formatEther, formatUnits, isAddress, parseUnits, type Address } from "viem";
 import { normalize } from "viem/ens";
 import { identityClient, defiClient, getIncomingUsdc } from "./evm";
-import { USDC, USDC_MAINNET, SWAP_TOKENS, LIFI_VAULTS, LIFI_DEFAULT_VAULT, NATIVE_SEND_CHAINS } from "./chain";
+import { USDC, USDC_MAINNET, SWAP_TOKENS, NATIVE_SEND_CHAINS } from "./chain";
 import { getSwapQuote } from "./swap";
-import { composeSwapAndZap, bridgeQuote, BRIDGE_CHAINS, chainNameForId } from "./lifi";
 import { getWallet } from "./wallet-store";
 import { createExecution } from "./executions";
 import { runSubagent } from "./subagent";
@@ -67,8 +66,8 @@ export function buildTools({
           defiClient.readContract(usdcAbi).catch(() => 0n),
         ]);
         // Unified, chain-spanning view: the same account holds funds on both chains, so report a
-        // total and which chain each balance sits on. Lets the agent route across chains (bridge
-        // then act) instead of treating each chain as a separate wallet.
+        // total and which chain each balance sits on, instead of treating each chain as a separate
+        // wallet.
         const ethUsdc = Number(formatUnits(l1Usdc, 6));
         const baseUsdcNum = Number(formatUnits(baseUsdc, USDC.decimals));
         return {
@@ -80,9 +79,9 @@ export function buildTools({
           totalUsdc: (ethUsdc + baseUsdcNum).toString(),
           usdcByChain: { ethereum: ethUsdc.toString(), base: baseUsdcNum.toString() },
           note:
-            "This is ONE account across both chains. Swaps/zaps/sends run on Base; identity on " +
-            "Ethereum. If a value action needs funds that are on the other chain, bridge_tokens " +
-            "first, then do the action — don't make the human pick a chain.",
+            "This is ONE account across both chains. Swaps/sends run on Base; identity on " +
+            "Ethereum. Act on the chain where the funds already are; if they're on the other " +
+            "chain, say so plainly.",
         };
       },
     }),
@@ -266,145 +265,6 @@ export function buildTools({
             agent: selfKey,
             summary: `Swap ${amount} ${fromS} → ${toS}${estOut} on Base`,
             details: { action: "swap", fromSymbol: fromS, toSymbol: toS, amount },
-          },
-          userId,
-        );
-        emit({ type: "proposal", card });
-        return {
-          proposed: true,
-          executionId: card.executionId,
-          note: `Proposed: ${card.summary}. Awaiting the human's confirmation.`,
-        };
-      },
-    }),
-
-    lifi_zap: tool({
-      description:
-        "Propose a LI.FI swap-and-zap on Base mainnet: swap a token into USDC (skipped if it's " +
-        "already USDC) and deposit it into a yield vault in one atomic flow. Vaults: " +
-        Object.keys(LIFI_VAULTS).join(", ") +
-        ". Use when the human wants to put funds to work earning yield. Does NOT execute until " +
-        "the human confirms.",
-      inputSchema: z.object({
-        fromSymbol: z
-          .string()
-          .describe(`Input token on Base to start from, e.g. ${Object.keys(SWAP_TOKENS).join(", ")}`),
-        amount: z.string().describe('Human amount of the from-token, e.g. "3"'),
-        vault: z
-          .string()
-          .optional()
-          .describe(`Vault key (default ${LIFI_DEFAULT_VAULT}): ${Object.keys(LIFI_VAULTS).join(", ")}`),
-      }),
-      execute: async ({ fromSymbol, amount, vault }) => {
-        const fromS = fromSymbol.toUpperCase();
-        const from = SWAP_TOKENS[fromS];
-        if (!from) {
-          return { proposed: false, error: `Supported input tokens: ${Object.keys(SWAP_TOKENS).join(", ")}` };
-        }
-        const vaultKey = (vault ?? LIFI_DEFAULT_VAULT).toUpperCase();
-        const v = LIFI_VAULTS[vaultKey];
-        if (!v) {
-          return { proposed: false, error: `Supported vaults: ${Object.keys(LIFI_VAULTS).join(", ")}` };
-        }
-        // Best-effort compile to enrich the card; the executor re-compiles fresh at execute time.
-        let est = "";
-        try {
-          const me = await getWallet(selfKey);
-          if (me) {
-            const r = await composeSwapAndZap({
-              signer: (me.ownerSmartAccount ?? me.address) as Address,
-              fromToken: from.address,
-              fromDecimals: from.decimals,
-              amount,
-              vaultToken: v.address,
-            });
-            if (r.status === "success" && r.priceImpact) {
-              est = ` (~$${r.priceImpact.inputValueUsd.toFixed(2)})`;
-            }
-          }
-        } catch {
-          /* no route / compile error — still propose; executor surfaces the error */
-        }
-        const card = await createExecution(
-          {
-            action: "lifi_zap",
-            agent: selfKey,
-            summary: `Swap ${amount} ${fromS} → deposit into ${v.label}${est} on Base`,
-            details: { action: "lifi_zap", fromSymbol: fromS, amount, vault: vaultKey, vaultLabel: v.label },
-          },
-          userId,
-        );
-        emit({ type: "proposal", card });
-        return {
-          proposed: true,
-          executionId: card.executionId,
-          note: `Proposed: ${card.summary}. Awaiting the human's confirmation.`,
-        };
-      },
-    }),
-
-    bridge_tokens: tool({
-      description:
-        "Propose bridging USDC across chains via LI.FI (only USDC is supported). Chains: " +
-        Object.keys(BRIDGE_CHAINS).join(", ") +
-        ". Use to move funds between networks. Does NOT execute until the human confirms.",
-      inputSchema: z.object({
-        token: z.string().describe('Token to bridge — only "USDC" is supported'),
-        amount: z.string().describe('Human amount, e.g. "5"'),
-        fromChain: z.string().describe(`Source chain: ${Object.keys(BRIDGE_CHAINS).join(", ")}`),
-        toChain: z.string().describe(`Destination chain: ${Object.keys(BRIDGE_CHAINS).join(", ")}`),
-      }),
-      execute: async ({ token, amount, fromChain, toChain }) => {
-        const fromId = BRIDGE_CHAINS[fromChain.toLowerCase()];
-        const toId = BRIDGE_CHAINS[toChain.toLowerCase()];
-        if (!fromId || !toId) {
-          return { proposed: false, error: `Supported chains: ${Object.keys(BRIDGE_CHAINS).join(", ")}` };
-        }
-        if (fromId === toId) {
-          return { proposed: false, error: "Source and destination chains must differ (use swap instead)." };
-        }
-        const tokenS = token.toUpperCase();
-        // Only USDC is wired (the enrich quote + executor assume 6 decimals). Reject anything else
-        // so a non-6-decimal token can't be mis-sized 10^12× into a misleading card / wrong-size tx.
-        if (tokenS !== "USDC") {
-          return { proposed: false, error: "Only USDC bridging is supported right now." };
-        }
-        // Best-effort quote to enrich the card (USDC is 6 decimals; LI.FI resolves the symbol).
-        let est = "";
-        try {
-          const me = await getWallet(selfKey);
-          if (me) {
-            const q = await bridgeQuote({
-              fromChain: fromId,
-              toChain: toId,
-              fromToken: tokenS,
-              toToken: tokenS,
-              fromAmount: parseUnits(amount, 6).toString(),
-              fromAddress: (me.ownerSmartAccount ?? me.address) as Address,
-              toAddress: (me.ownerSmartAccount ?? me.address) as Address,
-            });
-            const out = q.estimate?.toAmount && q.action?.toToken?.decimals !== undefined
-              ? formatUnits(BigInt(q.estimate.toAmount), q.action.toToken.decimals)
-              : null;
-            if (out) est = ` (~${out} ${tokenS}${q.tool ? ` via ${q.tool}` : ""})`;
-          }
-        } catch {
-          /* no route — still propose; executor surfaces the error */
-        }
-        const card = await createExecution(
-          {
-            action: "lifi_bridge",
-            agent: selfKey,
-            summary: `Bridge ${amount} ${tokenS} ${fromChain} → ${toChain}${est}`,
-            details: {
-              action: "lifi_bridge",
-              token: tokenS,
-              amount,
-              fromChainId: fromId,
-              toChainId: toId,
-              fromChain: chainNameForId(fromId),
-              toChain: chainNameForId(toId),
-            },
           },
           userId,
         );

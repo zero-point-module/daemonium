@@ -4,7 +4,8 @@ import type { ProposalCard } from '@/app/lib/types';
 /**
  * The human-confirmation gate. The agent PROPOSES; this renders the proposal and waits. A
  * confirm tap sends back only the opaque `executionId` (never a built transaction) — the server
- * route is the sole signer. This is the entire confirm-before-act contract, made visible.
+ * resolves it to the payload it validated and stored. This is the entire confirm-before-act
+ * contract, made visible.
  *
  * The card reads as a single onchain MOVE: a per-action glyph, then a from → to flow (what
  * leaves, where it lands), tinted to the live room color (var(--state)) so it belongs to the
@@ -16,8 +17,6 @@ const ACTION_LABEL: Record<ProposalCard['action'], string> = {
   send_eth: 'Send ETH',
   swap: 'Swap',
   spawn_subagent: 'Summon sub-dæmon',
-  lifi_zap: 'Swap & Zap',
-  lifi_bridge: 'Bridge',
 };
 
 const short = (a: string) => (a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
@@ -55,18 +54,6 @@ function flowFor(proposal: ProposalCard): Flow {
         to: { value: d.toSymbol, caption: 'you get' },
         note: 'Swap on Base',
       };
-    case 'lifi_zap':
-      return {
-        from: { value: `${d.amount} ${d.fromSymbol}`, caption: 'deposit' },
-        to: { value: d.vaultLabel, caption: 'into vault' },
-        note: 'Earn yield · Base',
-      };
-    case 'lifi_bridge':
-      return {
-        from: { value: `${d.amount} ${d.token}`, caption: `from ${d.fromChain}` },
-        to: { value: d.toChain, caption: 'arrives on' },
-        note: 'Cross-chain bridge',
-      };
     case 'spawn_subagent':
       return {
         from: { value: d.parentKey.split('.')[0], caption: 'parent' },
@@ -86,8 +73,6 @@ function ActionGlyph({ action }: { action: ProposalCard['action'] }) {
         <path d="M5 8h12l-3-3M19 16H7l3 3" />
       </>
     ),
-    lifi_zap: <path d="M13 3 5 13h6l-1 8 9-12h-7z" />,
-    lifi_bridge: <path d="M3 16v-1a9 9 0 0 1 18 0v1M3 16h18M7 16v4M17 16v4" />,
     spawn_subagent: <path d="M12 4l1.7 5.1L19 11l-5.3 1.9L12 18l-1.7-5.1L5 11l5.3-1.9z" />,
   };
   return (

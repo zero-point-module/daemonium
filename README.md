@@ -20,8 +20,8 @@ Daemonium is our implementation of an agent companion, built with a few principl
 - **Autonomy** — it should be able to move and act freely, on its own.
 
 Daemonium has native blockchain capabilities. Loaded with its own wallet, an ENS subdomain, and an
-ERC-8004 card, it can send tokens, bridge across chains, swap, read on-chain activity, and perform
-DeFi operations on approved protocols.
+ERC-8004 card, it can send tokens, swap, read on-chain activity, and perform DeFi operations on
+approved protocols.
 
 On top of the background tasks you can set your Daemonium to run while you do other things, it can
 summon and orchestrate sub-agents — called *Daemons*. These can be specialized and customized, and
@@ -55,9 +55,7 @@ private key ever lives in our infrastructure, and signing happens only behind an
 confirmation. Dynamic also provides user authentication (server-verified session JWTs) and powers
 token swaps via its Swap API.
 
-**Cross-chain & DeFi.** We integrate LI.FI for cross-chain bridging (e.g. USDC between Ethereum and
-Base) and atomic swap-and-zap into yield vaults (e.g. Aave on Base), so a dæmon can put idle funds
-to work. Hybrid topology: identity on Ethereum mainnet, value/DeFi on Base — one address across both.
+**Hybrid topology.** Identity on Ethereum mainnet, value/DeFi on Base — one address across both.
 
 **Identity.** Every agent owns its own ENS subdomain of `daemonium.eth` (`<name>.daemonium.eth`) as
 a human-readable identity. Each specialized sub-agent (dæmon) it spawns is minted a subdomain of its
