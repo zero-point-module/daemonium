@@ -48,7 +48,7 @@ export function buildTools({
     get_balance: tool({
       description:
         "Get your balances across BOTH chains — Ethereum mainnet (your identity chain, often where " +
-        "your ETH starts) and Base (the DeFi chain, where swaps/zaps run). Defaults to you; pass a " +
+        "your ETH starts) and Base (the DeFi chain, where swaps run). Defaults to you; pass a " +
         "sub-agent label for theirs.",
       inputSchema: z.object({
         subagent: z.string().optional().describe("Sub-agent label, e.g. 'research'"),
