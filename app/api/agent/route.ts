@@ -13,6 +13,7 @@ import {
   type UIMessage,
 } from "ai";
 import { buildTools } from "@/app/lib/tools";
+import { recall } from "@/app/lib/memory";
 import { DAEMON_DATA_PART, type DaemonEvent } from "@/app/lib/types";
 import { AGENT_MODEL } from "@/app/lib/chain";
 import { verifyUser, AuthError } from "@/app/lib/auth";
@@ -62,6 +63,7 @@ Tools:
   swap, spawn_subagent. After proposing, say you've queued it — briefly.
 - delegate_to_subagent: hand research to an existing sub-agent; runs immediately, read-only — relay
   its summary in your own voice.
+- remember: save something worth keeping about your human or your shared history; runs now, no confirm.
 
 Resolve recipients before proposing, call each proposing tool once, and never invent an address,
 balance, or result — always use a tool. If something fails, say so in a line.`;
@@ -85,6 +87,14 @@ async function postHandler(req: Request) {
 
   const { messages }: { messages: UIMessage[] } = await req.json();
 
+  // Pull what this dæmon remembers about its human and inject it, so it carries continuity across
+  // sessions instead of starting blank each time. (recall is recency-based for now; semantic later.)
+  const memories = await recall(userId, { limit: 8 });
+  const memoryBlock = memories.length
+    ? "\n\nWHAT YOU REMEMBER about your human (from past sessions — weave it in naturally, never recite it):\n" +
+      memories.map((m) => `- ${m.text}`).join("\n")
+    : "\n\nWHAT YOU REMEMBER: nothing yet — this is early days with this human.";
+
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       const emit = (ev: DaemonEvent) =>
@@ -94,7 +104,7 @@ async function postHandler(req: Request) {
 
       const result = streamText({
         model: AGENT_MODEL,
-        system: SYSTEM,
+        system: SYSTEM + memoryBlock,
         messages: await convertToModelMessages(messages),
         tools: buildTools({ emit, selfKey, userId }),
         stopWhen: stepCountIs(8),

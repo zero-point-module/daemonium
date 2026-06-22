@@ -18,6 +18,7 @@ import { getWallet } from "./wallet-store";
 import { createExecution } from "./executions";
 import { runSubagent } from "./subagent";
 import { startSpell, finishSpell } from "./spells";
+import { remember } from "./memory";
 import type { DaemonEvent } from "./types";
 
 export type Emit = (ev: DaemonEvent) => void;
@@ -333,6 +334,22 @@ export function buildTools({
           emit({ type: "state", state: "thinking" });
           throw err;
         }
+      },
+    }),
+
+    remember: tool({
+      description:
+        "Save something worth keeping about your human or your shared history — a preference, a " +
+        "fact about them, something that happened between you — so you can recall it in later " +
+        "sessions. Runs now; it's your own memory, so no confirmation is needed. Use it sparingly, " +
+        "for things that genuinely matter, not every passing detail.",
+      inputSchema: z.object({
+        text: z.string().describe("The thing to remember, in one plain sentence."),
+        kind: z.string().optional().describe('Loose category, e.g. "preference", "fact", "event".'),
+      }),
+      execute: async ({ text, kind }) => {
+        await remember(userId, { kind: kind ?? "note", text });
+        return { remembered: true, note: `Noted: ${text}` };
       },
     }),
   };
