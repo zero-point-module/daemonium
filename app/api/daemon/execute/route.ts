@@ -36,20 +36,18 @@ export const maxDuration = 120;
 
 export const POST = withRoute("execute", postHandler);
 
-/** Does this action exceed the user-chosen cap on the grant? Enforces the grant's `maxUsdc` for
- *  USDC sends (the clear, common case) server-side — the on-chain sudo policy can't. Over the cap →
- *  the action falls back to co-sign so the user signs the larger amount themselves. */
+/** True if this action can't run autonomously under the grant and must fall back to the user's
+ *  signature. Only a USDC send within the grant's `maxUsdc` auto-runs; a non-USDC action (send_eth /
+ *  swap) or a grant with no cap set falls back to co-sign — we don't auto-spend what we can't bound. */
 function exceedsGrantCap(
   card: { details: { action: string; amount?: string } },
   grant: SessionGrant,
 ): boolean {
+  if (card.details.action !== "send_usdc") return true;
   const max = grant.policy.maxUsdc;
-  if (max == null) return false;
-  if (card.details.action === "send_usdc") {
-    const amt = Number(card.details.amount);
-    return Number.isFinite(amt) && amt > max;
-  }
-  return false;
+  if (max == null) return true;
+  const amt = Number(card.details.amount);
+  return !Number.isFinite(amt) || amt > max;
 }
 
 async function postHandler(req: Request) {
