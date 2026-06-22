@@ -314,7 +314,7 @@ export function buildTools({
         label: z.string().describe("An existing sub-agent label under you"),
         task: z.string().describe("The task to delegate"),
       }),
-      execute: async ({ label, task }) => {
+      execute: async ({ label, task }, { abortSignal }) => {
         const childKey = `${label}.${selfKey}`;
         const sub = await getWallet(childKey);
         if (!sub || sub.parent !== selfKey) {
@@ -324,15 +324,18 @@ export function buildTools({
         // Register a live spell so the Cluster screen shows this dæmon actually working.
         const spellId = startSpell(userId, { agent: label, title: task });
         try {
-          const summary = await runSubagent({ label, task });
+          // Thread the parent's abort signal down so a barge-in also stops the sub-agent's loop.
+          const summary = await runSubagent({ label, task, abortSignal });
           finishSpell(spellId, { ok: true, summary });
           emit({ type: "subagentResult", agent: label, summary });
           emit({ type: "state", state: "thinking" });
           return { agent: label, summary };
         } catch (err) {
+          // Return the failure to the model (like every other tool) instead of throwing, so a failed
+          // sub-research becomes a graceful spoken line rather than a dead turn.
           finishSpell(spellId, { ok: false });
           emit({ type: "state", state: "thinking" });
-          throw err;
+          return { error: err instanceof Error ? err.message : "Sub-agent failed" };
         }
       },
     }),

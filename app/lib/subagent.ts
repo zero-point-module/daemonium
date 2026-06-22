@@ -30,8 +30,9 @@ const fetchUrl = tool({
 export async function runSubagent(opts: {
   label: string;
   task: string;
+  abortSignal?: AbortSignal;
 }): Promise<string> {
-  const { label, task } = opts;
+  const { label, task, abortSignal } = opts;
   const result = await generateText({
     model: AGENT_MODEL,
     system: `You are "${label}", a focused, read-only research sub-agent in the Daemonium
@@ -41,6 +42,7 @@ change anything onchain. If you cannot find solid info, say so plainly.`,
     prompt: task,
     tools: { fetch_url: fetchUrl },
     stopWhen: stepCountIs(5),
+    abortSignal,
   });
   return result.text.trim();
 }

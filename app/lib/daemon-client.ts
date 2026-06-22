@@ -77,6 +77,12 @@ export function useDaemon() {
         // "speak"/"subagentResult"/"done" — text already streams into messages.
       }
     },
+    // A request-level failure (pre-stream 500, network drop) never emits a data-daemon state event,
+    // so reset here instead of leaving the flame hung on the optimistic "thinking".
+    onError: () => {
+      reacting.current = false;
+      setState("error");
+    },
   });
 
   const sendPrompt = useCallback(
@@ -106,11 +112,18 @@ export function useDaemon() {
       setState("executing");
       try {
         // 1. Ask the server how this runs: executed server-side, or co-sign here.
-        const prep = (await fetch("/api/daemon/execute", {
+        const prepRes = await fetch("/api/daemon/execute", {
           method: "POST",
           headers: { "content-type": "application/json", ...authHeaders() },
           body: JSON.stringify({ executionId }),
-        }).then((r) => r.json())) as PrepareResponse;
+        });
+        if (!prepRes.ok) {
+          // Surface the server's real reason (e.g. "proposal already used") instead of letting an
+          // error body fall through and crash as a TypeError on prep.calls.
+          const body = (await prepRes.json().catch(() => ({}))) as { error?: string };
+          throw new Error(body.error ?? `Couldn't prepare the action (${prepRes.status}).`);
+        }
+        const prep = (await prepRes.json()) as PrepareResponse;
 
         let res: ExecuteResponse;
         if (prep.mode === "server") {
@@ -130,12 +143,19 @@ export function useDaemon() {
             chainId: prep.chainId,
           });
           // 3. Record + consume the proposal now that the UserOp landed.
-          res = (await fetch("/api/daemon/execute/complete", {
+          const completeRes = await fetch("/api/daemon/execute/complete", {
             method: "POST",
             headers: { "content-type": "application/json", ...authHeaders() },
             body: JSON.stringify({ executionId, hash, ok: true, chainId: prep.chainId }),
-          }).then((r) => r.json())) as ExecuteResponse;
-          if (!res.hash) res.hash = hash;
+          });
+          if (completeRes.ok) {
+            res = (await completeRes.json()) as ExecuteResponse;
+            if (!res.hash) res.hash = hash;
+          } else {
+            // The UserOp already landed on-chain (we have `hash`); only the server-side bookkeeping
+            // failed. Report success — telling the user it failed would be wrong.
+            res = { ok: true, hash, chainId: prep.chainId };
+          }
         }
 
         setTxResult({ ...res, executionId });

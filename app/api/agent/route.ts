@@ -130,7 +130,12 @@ async function postHandler(req: Request) {
         system: SYSTEM + memoryBlock,
         messages: modelMessages,
         tools: buildTools({ emit, selfKey, userId }),
-        stopWhen: stepCountIs(8),
+        // Stop the model + in-flight tools when the human barges in (the client aborts the fetch),
+        // so we don't keep billing tokens for a reply they already interrupted.
+        abortSignal: req.signal,
+        // Spoken replies are one or two short sentences — cap output as a cost/latency guardrail.
+        maxOutputTokens: 512,
+        stopWhen: stepCountIs(12),
         onFinish: ({ text }) => {
           if (text?.trim()) emit({ type: "speak", text: text.trim() });
           emit({ type: "state", state: "idle" });
